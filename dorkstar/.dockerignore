@@ -1,0 +1,33 @@
+# ─── Build artifacts ─────────────────────────────────────────────────────────
+node_modules
+.svelte-kit
+build
+
+# ─── Version control ──────────────────────────────────────────────────────────
+.git
+.gitignore
+
+# ─── Test files ───────────────────────────────────────────────────────────────
+**/*.test.ts
+**/*.spec.ts
+**/__tests__/
+coverage/
+
+# ─── Development config ───────────────────────────────────────────────────────
+.vscode
+.env
+.env.*
+!.env.example
+
+# ─── OS / editor artifacts ────────────────────────────────────────────────────
+.DS_Store
+*.log
+*.tmp
+
+# ─── Docker files (no need to copy into the image) ────────────────────────────
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# ─── Documentation ────────────────────────────────────────────────────────────
+README.md

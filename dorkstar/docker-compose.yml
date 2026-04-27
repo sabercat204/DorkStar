@@ -1,0 +1,32 @@
+services:
+  dorkstar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: dorkstar:latest
+    container_name: dorkstar
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      # Set to the path of your SQLite database file inside the container.
+      # The file will be persisted in the `dorkstar-data` volume below.
+      DATABASE_URL: /data/dorkstar.db
+    volumes:
+      # Persist SQLite result store across container restarts
+      - dorkstar-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  # Named volume for SQLite result store persistence
+  dorkstar-data:
+    driver: local

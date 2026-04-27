@@ -1,0 +1,281 @@
+DorkstarQuery {
+  // Top-level rule: one or more Terms separated by optional whitespace
+  Query
+    = spaces Term (spaces Term)* spaces
+
+  // Ordered choice of all term types — more specific rules first
+  Term
+    = BooleanExpr
+    | RangeExpr
+    | OperatorExpr
+    | ExcludeTerm
+    | IncludeTerm
+    | ProximityExpr
+    | WildcardPhrase
+    | ExactPhrase
+    | BareWord
+
+  // Boolean expression: left AND/OR/NOT right
+  // Note: BooleanExpr is left-recursive in spirit but written as flat here
+  BooleanExpr
+    = NonBooleanTerm spaces BooleanOp spaces NonBooleanTerm
+
+  // A term that is not itself a BooleanExpr (to avoid left-recursion issues)
+  NonBooleanTerm
+    = RangeExpr
+    | OperatorExpr
+    | ExcludeTerm
+    | IncludeTerm
+    | ProximityExpr
+    | WildcardPhrase
+    | ExactPhrase
+    | BareWord
+
+  // Boolean operators (case-sensitive)
+  BooleanOp
+    = "AND" | "OR" | "NOT"
+
+  // Range expression: name:min..max  (must come before OperatorExpr)
+  RangeExpr
+    = OperatorName ":" Number ".." Number
+
+  // Operator expression: name:value
+  OperatorExpr
+    = OperatorName ":" OperatorValue
+
+  // All canonical operator names — longer/more-specific names MUST come before
+  // shorter ones to prevent prefix ambiguity in PEG ordered choice.
+  OperatorName
+    // Dotted operators — most specific first
+    = "services.http.response.html_title"
+    | "services.port"
+    | "http.favicon.hash"
+    | "http.title"
+    | "http.body"
+    | "ssl.jarm"
+    | "ssl.ja3s"
+    // "allin*" variants before their "in*" counterparts
+    | "allintitle"
+    | "allinurl"
+    | "allintext"
+    | "allinanchor"
+    // "in*" variants
+    | "intitle"
+    | "inurl"
+    | "intext"
+    | "inbody"
+    | "inanchor"
+    | "inpage"
+    // "has_*" and "is_*" operators
+    | "has_screenshot"
+    | "is_vulnerability"
+    // "min_*" operators (underscore-prefixed, before "min" prefix)
+    | "min_retweets"
+    | "min_faves"
+    | "min_replies"
+    // "minCitationCount" — camelCase, distinct from "min_*"
+    | "minCitationCount"
+    // "matchType" — unique camelCase
+    | "matchType"
+    // "fieldsOfStudy" — unique camelCase
+    | "fieldsOfStudy"
+    // "hasfeed" before "feed"
+    | "hasfeed"
+    // "hostname" before "host"
+    | "hostname"
+    // "language" before "lang"
+    | "language"
+    // "location" before "loc"
+    | "location"
+    // "selftext" before "self"
+    | "selftext"
+    // "subreddit" before "self", "source", "symbol", "since", "site"
+    | "subreddit"
+    // "daterange" before "date"
+    | "daterange"
+    // "protocol" before "product"
+    | "protocol"
+    | "product"
+    // "version" before "ver"
+    | "version"
+    // "filetype" before "filter", "flair", "feed", "fl", "from"
+    | "filetype"
+    | "filter"
+    | "flair"
+    // "classification" — unique
+    | "classification"
+    // "collapse" — unique
+    | "collapse"
+    // "contains" before "content"
+    | "contains"
+    | "content"
+    // "country" — unique
+    | "country"
+    // "related" — unique
+    | "related"
+    // "rhost" before "repo"
+    | "rhost"
+    | "repo"
+    // "author" — unique
+    | "author"
+    // "actor" — unique
+    | "actor"
+    // "after" — unique (not a prefix of anything else)
+    | "after"
+    // "before" — unique
+    | "before"
+    // "banner" — unique
+    | "banner"
+    // "prefer" — unique
+    | "prefer"
+    // "labels" before "lang", "loc", "limit"
+    | "labels"
+    | "limit"
+    // "source" before "symbol", "since", "site", "self", "service"
+    | "source"
+    | "symbol"
+    | "since"
+    | "site"
+    // "service" — unique (not "services.*", already listed)
+    | "service"
+    // "cache" — unique
+    | "cache"
+    // "city" before "cidr"
+    | "city"
+    | "cidr"
+    // "cve" — unique
+    | "cve"
+    // "define" — unique
+    | "define"
+    // "device" — unique
+    | "device"
+    // "domain" — unique
+    | "domain"
+    // "feed" — unique (not "hasfeed", already listed)
+    | "feed"
+    // "path" before "port", "product" (already listed), "prefer" (already listed)
+    | "path"
+    | "port"
+    // "tags" before "tag", "tech", "title", "to"
+    | "tags"
+    | "tag"
+    | "tech"
+    | "title"
+    // "until" — unique
+    | "until"
+    // "venue" — unique
+    | "venue"
+    // "vuln" — unique
+    | "vuln"
+    // "user" — unique
+    | "user"
+    // "url" — unique
+    | "url"
+    // "ver" — unique (not "version", already listed)
+    | "ver"
+    // "to" — unique
+    | "to"
+    // "from" — unique
+    | "from"
+    // "fl" — unique
+    | "fl"
+    // "ext" — unique
+    | "ext"
+    // "app" — unique
+    | "app"
+    // "asn" — unique
+    | "asn"
+    // "date" — unique (not "daterange", already listed)
+    | "date"
+    // "lang" — unique (not "language", already listed)
+    | "lang"
+    // "loc" — unique (not "location", already listed)
+    | "loc"
+    // "mime" — unique
+    | "mime"
+    // "net" — unique
+    | "net"
+    // "org" — unique
+    | "org"
+    // "os" — unique
+    | "os"
+    // "output" — unique
+    | "output"
+    // "ip" — unique
+    | "ip"
+    // "jarm" — unique (not "ssl.jarm", already listed)
+    | "jarm"
+    // "host" — unique (not "hostname", already listed)
+    | "host"
+    // "self" — unique (not "selftext", already listed)
+    | "self"
+
+  // Operator value: quoted string or unquoted value
+  OperatorValue
+    = QuotedString
+    | UnquotedValue
+
+  // Exclude term: -operator, -phrase, or -bareword
+  ExcludeTerm
+    = "-" (OperatorExpr | ExactPhrase | BareWord)
+
+  // Include term: +operator, +phrase, or +bareword
+  IncludeTerm
+    = "+" (OperatorExpr | ExactPhrase | BareWord)
+
+  // Exact phrase: "quoted text"
+  ExactPhrase
+    = "\"" (~"\"" any)* "\""
+
+  // Proximity expression: word AROUND(n) word
+  ProximityExpr
+    = BareWord spaces "AROUND(" digit+ ")" spaces BareWord
+
+  // Wildcard phrase: a BareWord or QuotedString that contains * or ?
+  // Must contain at least one wildcard character
+  WildcardPhrase
+    = WildcardBareWord
+    | WildcardQuotedString
+
+  // A bare word containing at least one * or ?
+  // Composed of: non-space/quote/colon chars, with at least one wildcard
+  WildcardBareWord
+    = BareWordChar* WildcardChar BareWordChar*
+
+  // A quoted string containing at least one * or ?
+  WildcardQuotedString
+    = "\"" (~"\"" any)* WildcardChar (~"\"" any)* "\""
+
+  // A single wildcard character
+  WildcardChar
+    = "*" | "?"
+
+  // A single bare word character: non-whitespace, non-quote, non-colon
+  BareWordChar
+    = ~space ~"\"" ~":" ~"*" ~"?" any
+
+  // Bare word: one or more non-whitespace, non-quote, non-colon characters
+  // Must not match boolean keywords AND, OR, NOT
+  // Must not match an OperatorName followed by ":" (those are OperatorExpr)
+  BareWord
+    = ~BooleanKeyword ~(OperatorName ":") BareWordChar+
+
+  // Boolean keywords (case-sensitive) — must be followed by space or end of input
+  BooleanKeyword
+    = ("AND" | "OR" | "NOT") &(space | end)
+
+  // Quoted string: "..." (used in operator values)
+  QuotedString
+    = "\"" (~"\"" any)* "\""
+
+  // Unquoted value: one or more non-whitespace characters
+  UnquotedValue
+    = (~space any)+
+
+  // Number: one or more digits
+  Number
+    = digit+
+
+  // Note: 'spaces' (zero or more whitespace) is provided by Ohm's built-in rules.
+  // We use it directly throughout this grammar without redefinition.
+}

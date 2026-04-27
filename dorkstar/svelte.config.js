@@ -1,4 +1,10 @@
-import adapter from '@sveltejs/adapter-auto';
+// Use adapter-node when running in Docker / Node.js production environments.
+// Falls back to adapter-auto for other deployment targets (Vercel, Cloudflare, etc.)
+// by checking the SVELTE_ADAPTER env var.
+import adapterNode from '@sveltejs/adapter-node';
+import adapterAuto from '@sveltejs/adapter-auto';
+
+const adapter = process.env.SVELTE_ADAPTER === 'node' ? adapterNode : adapterAuto;
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
@@ -7,9 +13,6 @@ const config = {
 		runes: ({ filename }) => (filename.split(/[/\\]/).includes('node_modules') ? undefined : true)
 	},
 	kit: {
-		// adapter-auto only supports some environments, see https://svelte.dev/docs/kit/adapter-auto for a list.
-		// If your environment is not supported, or you settled on a specific environment, switch out the adapter.
-		// See https://svelte.dev/docs/kit/adapters for more information about adapters.
 		adapter: adapter()
 	}
 };
