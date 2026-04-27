@@ -7,6 +7,9 @@
 	import { parseQuery } from '$lib/parser/index';
 	import type { EngineId } from '$lib/translation/types';
 	import { emitCmd, cmd, lastCmd } from '$lib/stores/cmd-log';
+	// Filter state now lives in filter-store — QueryComposer only shows active chips
+	import { selectedFT, toggleFT, clearFT, domains, removeDomain, clearDomains, multiItems, removeMultiItem, clearMulti } from '$lib/stores/filter-store';
+	import { onMount } from 'svelte';
 
 	const tm = new TranslationManager(adapterRegistry);
 
@@ -16,143 +19,16 @@
 	let acIndex = $state(0);
 	let textareaEl = $state<HTMLTextAreaElement | null>(null);
 
+	// Auto-focus the input on mount
+	onMount(() => {
+		setTimeout(() => textareaEl?.focus(), 50);
+	});
+
 	// ── Degradation popover ───────────────────────────────────────────────────
 	let openDegEngine = $state<string | null>(null);
 
-	// ── Active panel: only one sub-panel open at a time ───────────────────────
-	type Panel = 'filetype' | 'domain' | 'multi' | null;
-	let activePanel = $state<Panel>(null);
-	function togglePanel(p: Panel) { activePanel = activePanel === p ? null : p; }
-
 	// ── File type selector ────────────────────────────────────────────────────
-	const FT_GROUPS: { label: string; types: string[] }[] = [
-		{ label: 'Documents', types: ['pdf','doc','docx','xls','xlsx','ppt','pptx','odt','ods','odp','rtf','txt','wps','wpd','pages','numbers','key','epub','mobi','azw','djvu','xps','oxps'] },
-		{ label: 'Images', types: ['jpg','jpeg','png','gif','bmp','tiff','tif','webp','svg','ico','heic','heif','raw','cr2','nef','arw','dng','psd','ai','eps','cdr','xcf','sketch'] },
-		{ label: 'Video', types: ['mp4','mkv','avi','mov','wmv','flv','webm','m4v','mpg','mpeg','3gp','ogv','ts','mts','m2ts','vob','divx','xvid','rm','rmvb'] },
-		{ label: 'Audio', types: ['mp3','wav','flac','aac','ogg','wma','m4a','opus','aiff','aif','mid','midi','ape','mka','ra','rm'] },
-		{ label: 'Archives', types: ['zip','rar','7z','tar','gz','bz2','xz','tgz','tbz2','cab','iso','img','dmg','pkg','deb','rpm','apk','ipa','jar','war','ear'] },
-		{ label: 'Source Code', types: ['js','ts','jsx','tsx','py','rb','go','java','c','cpp','h','hpp','cs','php','swift','kt','rs','scala','lua','pl','r','m','sh','bash','zsh','ps1','bat','cmd','asm','s','vb','vbs','coffee','elm','ex','exs','erl','hs','ml','clj','lisp','f','f90','f95'] },
-		{ label: 'Web', types: ['html','htm','css','scss','sass','less','xml','json','yaml','yml','toml','graphql','gql','wasm','htaccess','htpasswd','webmanifest'] },
-		{ label: 'Data', types: ['csv','tsv','sql','db','sqlite','sqlite3','mdb','accdb','dbf','parquet','avro','orc','hdf5','h5','mat','sav','dta','rdata','rds','feather','arrow'] },
-		{ label: 'Config', types: ['conf','cfg','ini','env','properties','plist','reg','inf','sys','service','socket','timer','desktop','rc','profile','bashrc','zshrc','vimrc','gitconfig','npmrc','yarnrc','editorconfig','prettierrc','eslintrc','babelrc','dockerignore','gitignore'] },
-		{ label: 'Secrets', types: ['pem','key','crt','cer','p12','pfx','jks','keystore','pub','ppk','asc','gpg','pgp','ovpn','p8','der','csr'] },
-		{ label: 'Executables', types: ['exe','dll','so','dylib','bin','elf','com','scr','msi','msix','appx','xpi','crx','vsix','snap','flatpak'] },
-		{ label: 'Disk Images', types: ['iso','img','vmdk','vhd','vhdx','qcow2','ova','ovf','vdi','hdd','toast','nrg','mdf','bin','cue'] },
-		{ label: 'Database', types: ['sql','dump','bak','mdf','ldf','frm','ibd','myd','myi','dbf','accdb','mdb','sqlite','db3','s3db','sl3'] },
-		{ label: 'CAD/3D', types: ['dwg','dxf','stl','obj','fbx','3ds','blend','max','maya','mb','ma','step','stp','iges','igs','sat','x_t','x_b','sldprt','sldasm','slddrw','ipt','iam','idw','catpart','catproduct'] },
-		{ label: 'System', types: ['log','tmp','temp','swp','lock','pid','sock','fifo','core','dmp','crash','etl','evt','evtx','cab','inf','cat','manifest','mui','mun'] },
-		{ label: 'Fonts', types: ['ttf','otf','woff','woff2','eot','fon','fnt','pfb','pfm','afm'] },
-		{ label: 'Ebooks', types: ['epub','mobi','azw','azw3','lit','lrf','pdb','fb2','djvu','cbz','cbr','cb7'] },
-		{ label: 'Misc', types: ['torrent','nfo','sfv','md5','sha1','sha256','crc','par2','nzb','magnet'] },
-	];
-
-	const SUGGESTED_PRESETS: { label: string; icon: string; types: string[] }[] = [
-		{ label: 'Music',       icon: '♪', types: ['mp3','flac','wav','aac','ogg','m4a','wma','opus','aiff'] },
-		{ label: 'Movies',      icon: '▶', types: ['mp4','mkv','avi','mov','wmv','m4v','mpg','mpeg','webm'] },
-		{ label: 'Documents',   icon: '📄', types: ['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','rtf','odt'] },
-		{ label: 'Images',      icon: '🖼', types: ['jpg','jpeg','png','gif','bmp','tiff','webp','svg','heic','raw'] },
-		{ label: 'Applications',icon: '⚙', types: ['exe','msi','dmg','pkg','deb','rpm','apk','ipa','appx'] },
-		{ label: 'Databases',   icon: '🗄', types: ['sql','db','sqlite','mdb','accdb','dump','bak','dbf'] },
-		{ label: 'Disk Images', icon: '💿', types: ['iso','img','vmdk','vhd','qcow2','ova','nrg','mdf'] },
-		{ label: 'CAD',         icon: '📐', types: ['dwg','dxf','stl','obj','fbx','step','iges','blend'] },
-		{ label: 'System',      icon: '🖥', types: ['log','tmp','dmp','crash','evtx','etl','core','lock'] },
-		{ label: 'Settings',    icon: '⚙', types: ['conf','cfg','ini','env','plist','reg','properties','yaml','toml'] },
-		{ label: 'Secrets',     icon: '🔑', types: ['pem','key','crt','p12','pfx','pub','ppk','ovpn','gpg'] },
-		{ label: 'Archives',    icon: '📦', types: ['zip','rar','7z','tar','gz','bz2','xz','tgz','cab'] },
-		{ label: 'Source Code', icon: '💻', types: ['py','js','ts','go','java','c','cpp','php','rb','rs','sh'] },
-		{ label: 'Misc',        icon: '?', types: ['torrent','nfo','sfv','md5','par2','nzb'] },
-	];
-
-	let selectedFT = $state<Set<string>>(new Set());
-
-	function toggleFT(ft: string) {
-		const next = new Set(selectedFT);
-		const adding = !next.has(ft);
-		next.has(ft) ? next.delete(ft) : next.add(ft);
-		selectedFT = next;
-		emitCmd(adding ? cmd.filetypeAdd(ft) : cmd.filetypeRemove(ft));
-		applyFT();
-	}
-
-	function clearFT() { selectedFT = new Set(); emitCmd(cmd.filetypeClear()); applyFT(); }
-
-	function applyFT() {
-		let base = $canonicalQuery
-			.replace(/\(\s*filetype:[^)]+\)/gi, '')
-			.replace(/filetype:\S+/gi, '')
-			.trim();
-		if (selectedFT.size === 0) { canonicalQuery.set(base); return; }
-		const types = [...selectedFT];
-		const frag = types.length === 1
-			? `filetype:${types[0]}`
-			: `(${types.map(t => `filetype:${t}`).join(' OR ')})`;
-		canonicalQuery.set(base ? `${base} ${frag}` : frag);
-	}
-
-	// ── Domain search ─────────────────────────────────────────────────────────
-	// Stores the raw comma/newline-separated domain input
-	let domainInput = $state('');
-	// Parsed list of trimmed, non-empty domains
-	const domains = $derived(
-		domainInput
-			.split(/[\n,]+/)
-			.map(d => d.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, ''))
-			.filter(d => d.length > 0)
-	);
-
-	function applyDomains() {
-		// Remove any existing site: fragments from the query
-		let base = $canonicalQuery
-			.replace(/\(\s*site:[^)]+\)/gi, '')
-			.replace(/site:\S+/gi, '')
-			.trim();
-		if (domains.length === 0) { canonicalQuery.set(base); return; }
-		const frag = domains.length === 1
-			? `site:${domains[0]}`
-			: `(${domains.map(d => `site:${d}`).join(' OR ')})`;
-		canonicalQuery.set(base ? `${base} ${frag}` : frag);
-		emitCmd(cmd.domainApply(domains));
-	}
-
-	function removeDomain(domain: string) {
-		const remaining = domains.filter(d => d !== domain);
-		domainInput = remaining.join('\n');
-		applyDomains();
-	}
-
-	function clearDomains() { domainInput = ''; emitCmd(cmd.domainClear()); applyDomains(); }
-
-	// ── Multi-item search ─────────────────────────────────────────────────────
-	// One keyword/phrase per line; each is quoted and OR-joined
-	let multiInput = $state('');
-	const multiItems = $derived(
-		multiInput
-			.split('\n')
-			.map(l => l.trim())
-			.filter(l => l.length > 0)
-	);
-
-	function applyMulti() {
-		// Remove any existing multi-item OR group from the query
-		let base = $canonicalQuery
-			.replace(/\(\s*"[^"]*"(?:\s+OR\s+"[^"]*")+\s*\)/gi, '')
-			.trim();
-		if (multiItems.length === 0) { canonicalQuery.set(base); return; }
-		// Single item: just quote it; multiple: wrap in OR group
-		const frag = multiItems.length === 1
-			? `"${multiItems[0]}"`
-			: `(${multiItems.map(t => `"${t}"`).join(' OR ')})`;
-		canonicalQuery.set(base ? `${base} ${frag}` : frag);
-		emitCmd(cmd.multiApply(multiItems));
-	}
-
-	function removeMultiItem(item: string) {
-		const remaining = multiItems.filter(i => i !== item);
-		multiInput = remaining.join('\n');
-		applyMulti();
-	}
-
-	function clearMulti() { multiInput = ''; emitCmd(cmd.multiClear()); applyMulti(); }
+	// State and logic moved to filter-store.ts — imported above via selectedFT, domains, multiItems
 
 	// ── Common operators for autocomplete ─────────────────────────────────────
 	const commonOps = $derived((() => {
@@ -218,248 +94,6 @@
 
 <div class="query-composer zone-query-composer">
 	{#if $mode === 'unified'}
-		<!-- ── Toolbar ──────────────────────────────────────────────────────── -->
-		<div class="toolbar">
-			<div class="toolbar__left">
-				<!-- File type button -->
-				<button
-					class="btn btn--ghost btn--sm"
-					class:btn--active={activePanel === 'filetype'}
-					onclick={() => togglePanel('filetype')}
-					aria-expanded={activePanel === 'filetype'}
-					aria-label="File type filter"
-				>
-					<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-						<path d="M9 1H3a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6L9 1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-						<path d="M9 1v5h5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-					</svg>
-					File type
-					{#if selectedFT.size > 0}
-						<span class="badge badge--accent">{selectedFT.size}</span>
-					{/if}
-				</button>
-
-				<!-- Domain button -->
-				<button
-					class="btn btn--ghost btn--sm"
-					class:btn--active={activePanel === 'domain'}
-					onclick={() => togglePanel('domain')}
-					aria-expanded={activePanel === 'domain'}
-					aria-label="Domain filter"
-				>
-					<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-						<circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
-						<path d="M8 1.5C8 1.5 5.5 4 5.5 8s2.5 6.5 2.5 6.5M8 1.5C8 1.5 10.5 4 10.5 8S8 14.5 8 14.5M1.5 8h13" stroke="currentColor" stroke-width="1.5"/>
-					</svg>
-					Domain
-					{#if domains.length > 0}
-						<span class="badge badge--accent">{domains.length}</span>
-					{/if}
-				</button>
-
-				<!-- Multi-item button -->
-				<button
-					class="btn btn--ghost btn--sm"
-					class:btn--active={activePanel === 'multi'}
-					onclick={() => togglePanel('multi')}
-					aria-expanded={activePanel === 'multi'}
-					aria-label="Multi-item search"
-				>
-					<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-						<path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-					</svg>
-					Multi-item
-					{#if multiItems.length > 0}
-						<span class="badge badge--accent">{multiItems.length}</span>
-					{/if}
-				</button>
-
-				<!-- Active chips row -->
-				{#each [...selectedFT] as ft}
-					<span class="chip-tag chip-tag--file">
-						.{ft}
-						<button class="chip-tag__remove" onclick={() => toggleFT(ft)} aria-label="Remove .{ft}">×</button>
-					</span>
-				{/each}
-				{#if selectedFT.size > 1}
-					<button class="btn-link" onclick={clearFT}>Clear files</button>
-				{/if}
-
-				{#each domains as d}
-					<span class="chip-tag chip-tag--domain">
-						{d}
-						<button class="chip-tag__remove" onclick={() => removeDomain(d)} aria-label="Remove {d}">×</button>
-					</span>
-				{/each}
-				{#if domains.length > 1}
-					<button class="btn-link" onclick={clearDomains}>Clear domains</button>
-				{/if}
-
-				{#each multiItems as item}
-					<span class="chip-tag chip-tag--multi">
-						"{item}"
-						<button class="chip-tag__remove" onclick={() => removeMultiItem(item)} aria-label='Remove "{item}"'>×</button>
-					</span>
-				{/each}
-				{#if multiItems.length > 1}
-					<button class="btn-link" onclick={clearMulti}>Clear items</button>
-				{/if}
-			</div>
-
-			<div class="toolbar__right">
-				<button
-					class="btn btn--ghost btn--sm"
-					class:btn--active={$mode === 'per-engine'}
-					onclick={() => { const next = $mode === 'unified' ? 'per-engine' : 'unified'; mode.set(next); emitCmd(cmd.modeToggle(next)); }}
-					title="Toggle per-engine mode (Ctrl+Shift+E)"
-					aria-pressed={$mode === 'per-engine'}
-				>Per-engine</button>
-
-				<button
-					class="btn btn--primary btn--sm"
-					onclick={() => executeQuery()}
-					aria-label="Run query (Enter)"
-				>
-					<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-						<path d="M2 1l9 5-9 5V1z"/>
-					</svg>
-					Run
-				</button>
-			</div>
-		</div>
-
-		<!-- ── File type panel ──────────────────────────────────────────────── -->
-		{#if activePanel === 'filetype'}
-			<div class="sub-panel" role="group" aria-label="File type selector">
-				<div class="sub-panel__header">
-					<span class="sub-panel__title">Filter by file type</span>
-					<span class="sub-panel__hint">Click to toggle · multiple selections are OR-joined</span>
-				</div>
-				<!-- Suggested presets row -->
-				<div class="ft-suggested">
-					<span class="ft-suggested__label">SUGGESTED</span>
-					<div class="ft-suggested__items">
-						{#each SUGGESTED_PRESETS as preset}
-							<button
-								class="ft-preset-btn"
-								onclick={() => {
-									// Toggle all types in preset: if all selected, deselect all; else select all
-									const allSelected = preset.types.every(t => selectedFT.has(t));
-									const next = new Set(selectedFT);
-									if (allSelected) {
-										preset.types.forEach(t => next.delete(t));
-									} else {
-										preset.types.forEach(t => next.add(t));
-									}
-									selectedFT = next;
-									applyFT();
-								}}
-								class:ft-preset-btn--active={preset.types.some(t => selectedFT.has(t))}
-								title="{preset.types.join(', ')}"
-							>
-								<span class="ft-preset-icon">{preset.icon}</span>
-								{preset.label}
-							</button>
-						{/each}
-					</div>
-				</div>
-				<div class="ft-groups">
-					{#each FT_GROUPS as group}
-						<div class="ft-group">
-							<span class="ft-group__label">{group.label}</span>
-							<div class="ft-group__items">
-								{#each group.types as ft}
-									<button
-										class="ft-btn"
-										class:ft-btn--selected={selectedFT.has(ft)}
-										onclick={() => toggleFT(ft)}
-										aria-pressed={selectedFT.has(ft)}
-									>.{ft}</button>
-								{/each}
-							</div>
-						</div>
-					{/each}
-				</div>
-				{#if selectedFT.size > 0}
-					<div class="sub-panel__footer">
-						<span class="sub-panel__preview">
-							→ <code>{selectedFT.size === 1 ? `filetype:${[...selectedFT][0]}` : `(${[...selectedFT].map(t=>`filetype:${t}`).join(' OR ')})`}</code>
-						</span>
-						<button class="btn-link" onclick={clearFT}>Clear all</button>
-					</div>
-				{/if}
-			</div>
-		{/if}
-
-		<!-- ── Domain search panel ───────────────────────────────────────────── -->
-		{#if activePanel === 'domain'}
-			<div class="sub-panel" role="group" aria-label="Domain search">
-				<div class="sub-panel__header">
-					<span class="sub-panel__title">Search by domain</span>
-					<span class="sub-panel__hint">Enter one domain per line, or comma-separated · multiple domains are OR-joined</span>
-				</div>
-				<div class="domain-input-wrap">
-					<textarea
-						class="domain-textarea"
-						placeholder="example.com&#10;*.gov&#10;subdomain.example.org"
-						bind:value={domainInput}
-						oninput={applyDomains}
-						rows="3"
-						spellcheck="false"
-						autocomplete="off"
-						aria-label="Domain list"
-					></textarea>
-					<div class="domain-actions">
-						{#if domains.length > 0}
-							<span class="domain-preview">
-								→ <code>{domains.length === 1 ? `site:${domains[0]}` : `(${domains.map(d=>`site:${d}`).join(' OR ')})`}</code>
-							</span>
-							<button class="btn btn--ghost btn--sm" onclick={clearDomains}>Clear</button>
-						{/if}
-					</div>
-				</div>
-				<div class="domain-tips">
-					<span class="tip">Tip: use <code>*.example.com</code> for all subdomains</span>
-					<span class="tip">Tip: paste a list of URLs — protocols and paths are stripped automatically</span>
-				</div>
-			</div>
-		{/if}
-
-		<!-- ── Multi-item search panel ───────────────────────────────────────── -->
-		{#if activePanel === 'multi'}
-			<div class="sub-panel" role="group" aria-label="Multi-item search">
-				<div class="sub-panel__header">
-					<span class="sub-panel__title">Search for multiple items</span>
-					<span class="sub-panel__hint">One keyword or phrase per line · results matching ANY item are returned (OR logic)</span>
-				</div>
-				<div class="multi-input-wrap">
-					<textarea
-						class="multi-textarea"
-						placeholder="admin panel&#10;login page&#10;password reset&#10;api key"
-						bind:value={multiInput}
-						oninput={applyMulti}
-						rows="5"
-						spellcheck="false"
-						autocomplete="off"
-						aria-label="Search terms list"
-					></textarea>
-					<div class="multi-actions">
-						{#if multiItems.length > 0}
-							<span class="multi-count">{multiItems.length} item{multiItems.length !== 1 ? 's' : ''}</span>
-							<span class="multi-preview">
-								→ <code>{multiItems.length === 1 ? `"${multiItems[0]}"` : `("${multiItems[0]}" OR ... +${multiItems.length - 1} more)`}</code>
-							</span>
-							<button class="btn btn--ghost btn--sm" onclick={clearMulti}>Clear</button>
-						{/if}
-					</div>
-				</div>
-				<div class="domain-tips">
-					<span class="tip">Tip: phrases with spaces are automatically quoted</span>
-					<span class="tip">Tip: combine with domain and file type filters for precise targeting</span>
-				</div>
-			</div>
-		{/if}
-
 		<!-- ── Query input — root csh shell prompt ──────────────────────────── -->
 		<div class="shell-block" class:shell-block--error={$parseErrors.length > 0}>
 			<div class="shell-line">
@@ -487,6 +121,14 @@
 						rows="1"
 					></textarea>
 				</div>
+
+				<!-- Run button — inline right of input -->
+				<button
+					class="shell-run-btn"
+					onclick={() => executeQuery()}
+					aria-label="Run query"
+					title="Run (Enter)"
+				>▶ RUN</button>
 			</div>
 
 			<!-- Autocomplete dropdown -->
@@ -742,13 +384,34 @@
 	}
 
 	/* ── Single prompt line ──────────────────────────────────────────────────── */
-	/* prompt + input-area all on one horizontal line */
+	/* prompt + input-area + run button all on one horizontal line */
 	.shell-line {
 		display: flex;
 		align-items: center;
 		padding: var(--sp-1) var(--sp-2);
 		gap: 0;
 		overflow: hidden;
+	}
+
+	/* Run button — right of input, inline in the shell line */
+	.shell-run-btn {
+		flex-shrink: 0;
+		background: none;
+		border: 1px solid var(--p-border-2, #004d00);
+		color: var(--p-bright, #66ff66);
+		font-family: var(--font-mono);
+		font-size: 12px;
+		padding: 0 6px;
+		height: 1.6em;
+		cursor: pointer;
+		margin-left: var(--sp-1);
+		transition: border-color var(--t-fast), box-shadow var(--t-fast);
+		line-height: 1;
+	}
+
+	.shell-run-btn:hover {
+		border-color: var(--p-bright, #66ff66);
+		box-shadow: 0 0 6px var(--p-glow-strong);
 	}
 
 	/* Input area: contains mirror text + cursor + transparent textarea overlay */

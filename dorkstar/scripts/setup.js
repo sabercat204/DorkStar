@@ -3,17 +3,17 @@
  * DORKSTAR Setup Script
  * ─────────────────────────────────────────────────────────────────────────────
  * Interactive CLI wizard that guides through API key configuration.
- * Keys are written to a local .env.keys file which is loaded at dev/build time
- * and injected into the app as Vite environment variables.
+ * Offers two modes:
+ *   1. Manual entry  — paste keys directly into the terminal
+ *   2. Registration  — Playwright opens a browser for each engine's signup page
  *
  * Usage:
- *   node scripts/setup.js          — full interactive setup
- *   node scripts/setup.js --check  — show current key status only
- *   node scripts/setup.js --reset  — clear all configured keys
- *
- * The generated .env.keys file is gitignored by default.
- * Keys are NEVER sent to any server — they are embedded at build time and
- * stored in the browser's IndexedDB at runtime.
+ *   npm run setup                   — full interactive setup (choose mode)
+ *   node scripts/setup.js           — same
+ *   node scripts/setup.js --check   — show current key status only
+ *   node scripts/setup.js --reset   — clear all configured keys
+ *   node scripts/setup.js --register — skip to Playwright registration mode
+ *   node scripts/setup.js --manual  — skip to manual entry mode
  */
 
 import { createInterface } from 'readline';
@@ -313,16 +313,43 @@ async function main() {
     process.exit(0);
   }
 
-  // Interactive setup
-  console.log(D('  This wizard will guide you through configuring API keys for each'));
-  console.log(D('  search engine. Keys are stored in .env.keys (gitignored) and'));
-  console.log(D('  loaded into the app via Vite environment variables.\n'));
-  console.log(D('  Press Enter to skip an engine. Type "none" for engines that'));
-  console.log(D('  don\'t require a key (e.g. arXiv). Type "q" to quit and save.\n'));
+  // --register: go straight to Playwright registration
+  if (args.includes('--register')) {
+    const { runRegistration } = await import('./register.js');
+    await runRegistration({ env });
+    process.exit(0);
+  }
+
+  // Interactive setup — choose mode
+  console.log(D('  Keys are stored in .env.keys (gitignored) and loaded via Vite.\n'));
 
   printStatus(env);
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+  // Mode selection
+  if (!args.includes('--manual')) {
+    console.log(B('  Setup mode:'));
+    console.log(`    ${G('[1]')} ${B('Register')}  — Playwright opens a browser for each engine's signup page`);
+    console.log(`    ${G('[2]')} ${B('Manual')}    — Paste API keys directly into the terminal`);
+    console.log('');
+
+    const modeChoice = (await prompt(rl, G('  Choose mode [1/2, default=1]: '))).trim();
+
+    if (modeChoice === '' || modeChoice === '1' || modeChoice.toLowerCase() === 'register') {
+      rl.close();
+      console.log('');
+      const { runRegistration } = await import('./register.js');
+      await runRegistration({ env });
+      process.exit(0);
+    }
+    // else fall through to manual mode
+    console.log(D('\n  Manual mode selected.\n'));
+  }
+
+  // Manual mode — ask which categories to configure
+  console.log(D('  Press Enter to skip an engine. Type "none" for engines that'));
+  console.log(D('  don\'t require a key (e.g. arXiv). Type "q" to quit and save.\n'));
 
   // Ask which categories to configure
   console.log(B('  Which categories do you want to configure?'));

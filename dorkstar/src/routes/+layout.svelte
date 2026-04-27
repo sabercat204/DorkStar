@@ -7,10 +7,6 @@
 <svelte:head>
 	<link rel="icon" href={favicon} />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<!-- VT100 phosphor font stack — prefer actual terminal fonts if installed -->
-	<link rel="preconnect" href="https://fonts.googleapis.com" />
-	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
-	<link href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
 </svelte:head>
 
 <div class="app-shell">
@@ -75,9 +71,9 @@
 		--c-academic:    #ccff66;
 
 		/* ── Typography ───────────────────────────────────────────────────── */
-		/* VT323 = pixel-perfect VT100 look; Share Tech Mono = clean fallback */
-		--font-sans:  'Share Tech Mono', 'VT323', 'Courier New', monospace;
-		--font-mono:  'Share Tech Mono', 'VT323', 'Courier New', monospace;
+		/* Standard system monospace — reliable rendering across all platforms */
+		--font-sans:  'Courier New', Courier, monospace;
+		--font-mono:  'Courier New', Courier, monospace;
 
 		/* ── Spacing ──────────────────────────────────────────────────────── */
 		--sp-1: 4px;
@@ -115,11 +111,9 @@
 
 	:global(html) {
 		height: 100%;
-		font-size: 14px;
-		/* Disable subpixel AA — phosphor pixels are crisp */
-		-webkit-font-smoothing: none;
+		font-size: 16px;
+		-webkit-font-smoothing: antialiased;
 		-moz-osx-font-smoothing: grayscale;
-		image-rendering: pixelated;
 	}
 
 	:global(body) {
@@ -128,8 +122,15 @@
 		color: var(--c-text);
 		font-family: var(--font-mono);
 		overflow: hidden;
-		/* Subtle phosphor text glow on everything */
 		text-shadow: 0 0 var(--crt-glow-radius) var(--p-glow-strong);
+		line-height: 1.2;
+		/* IBM EGA bitmap font: zero letter-spacing everywhere */
+		letter-spacing: 0;
+	}
+
+	/* Force zero letter-spacing on all elements — bitmap fonts break with any spacing */
+	:global(*) {
+		letter-spacing: 0 !important;
 	}
 
 	/* ── Phosphor text glow ─────────────────────────────────────────────────── */
@@ -185,15 +186,24 @@
 		inset: 0;
 		z-index: 9999;
 		pointer-events: none;
-		/* Horizontal scanlines */
-		background: repeating-linear-gradient(
-			0deg,
-			transparent,
-			transparent 2px,
-			rgba(0, 0, 0, var(--crt-scanline-opacity)) 2px,
-			rgba(0, 0, 0, var(--crt-scanline-opacity)) 4px
-		);
-		/* Subtle flicker animation */
+		/* Stronger horizontal scanlines — every 2px row */
+		background:
+			repeating-linear-gradient(
+				0deg,
+				transparent,
+				transparent 1px,
+				rgba(0, 0, 0, 0.18) 1px,
+				rgba(0, 0, 0, 0.18) 2px
+			),
+			/* Vertical pixel grid — EGA 8px column separation */
+			repeating-linear-gradient(
+				90deg,
+				transparent,
+				transparent 7px,
+				rgba(0, 0, 0, 0.04) 7px,
+				rgba(0, 0, 0, 0.04) 8px
+			);
+		/* Subtle flicker */
 		animation: crt-flicker 8s infinite;
 	}
 

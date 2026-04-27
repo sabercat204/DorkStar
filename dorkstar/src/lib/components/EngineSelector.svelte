@@ -137,150 +137,83 @@
 	const activeCount = $derived($activeEngines.length);
 	const allSelected = $derived(activeCount === totalEngines);
 	const noneSelected = $derived(activeCount === 0);
+
+	// ── Expanded category for sidebar collapse ────────────────────────────────
+	// Clicking a category tab toggles its engine list open/closed
+	let expandedCategory = $state<EngineCategory | 'all' | null>(null);
+
+	function toggleExpanded(cat: EngineCategory | 'all') {
+		expandedCategory = expandedCategory === cat ? null : cat;
+	}
+
+	// Engines filtered to a specific category
+	function enginesForCategory(cat: EngineCategory | 'all') {
+		if (cat === 'all') return orderedEngines;
+		return orderedEngines.filter(e => e.category === cat);
+	}
 </script>
 
 <div class="engine-selector" role="toolbar" aria-label="Engine selector">
-	<!-- ── Category filter tabs ──────────────────────────────────────────── -->
-	<div class="category-bar" role="tablist" aria-label="Filter by category">
-		{#each CATEGORIES as cat}
-			{@const active = isCategoryActive(cat)}
-			{@const partial = isCategoryPartial(cat)}
-			<button
-				role="tab"
-				aria-selected={active}
-				class="cat-tab"
-				class:is-active={active}
-				class:is-partial={partial && !active}
-				onclick={() => cat === 'all' ? toggleAll() : toggleCategory(cat)}
-				title="{CATEGORY_LABELS[cat]}: {categoryCount(cat)} of {categoryTotal(cat)} active"
-			>
-				{#if cat !== 'all'}
-					<span class="cat-dot" style="background:{CAT_COLOR[cat]}"></span>
-				{/if}
-				<span class="cat-label">{CATEGORY_LABELS[cat]}</span>
-				<span class="cat-count">{categoryCount(cat)}</span>
-			</button>
-		{/each}
+	<!-- ── Collapsible category sections ─────────────────────────────────── -->
+	{#each CATEGORIES.filter(c => c !== 'all') as cat}
+		{@const catEngines = enginesForCategory(cat as EngineCategory)}
+		{@const active = isCategoryActive(cat as EngineCategory)}
+		{@const partial = isCategoryPartial(cat as EngineCategory)}
+		{@const isExpanded = expandedCategory === cat}
+		{@const count = categoryCount(cat as EngineCategory)}
+		{@const total = categoryTotal(cat as EngineCategory)}
 
-		<!-- ── Selection toolbar ─────────────────────────────────────────── -->
-		<div class="sel-toolbar" role="group" aria-label="Bulk selection">
-			<!-- Selection count -->
-			<span class="sel-count" aria-live="polite" aria-label="{activeCount} of {totalEngines} engines selected">
-				<span class="sel-count__num">{activeCount}</span>
-				<span class="sel-count__sep">/</span>
-				<span class="sel-count__total">{totalEngines}</span>
-			</span>
-
-			<div class="sel-divider" aria-hidden="true"></div>
-
-			<!-- Select All -->
-			<button
-				class="sel-btn"
-				class:sel-btn--disabled={allSelected}
-				onclick={selectAll}
-				disabled={allSelected}
-				title="Select all engines"
-				aria-label="Select all engines"
-			>
-				<svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-					<rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
-					<path d="M4 8l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-				</svg>
-				All
-			</button>
-
-			<!-- Deselect All -->
-			<button
-				class="sel-btn"
-				class:sel-btn--disabled={noneSelected}
-				onclick={deselectAll}
-				disabled={noneSelected}
-				title="Deselect all engines"
-				aria-label="Deselect all engines"
-			>
-				<svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-					<rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
-					<path d="M5 5l6 6M11 5l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-				</svg>
-				None
-			</button>
-
-			<div class="sel-divider" aria-hidden="true"></div>
-
-			<!-- Per-category quick-select buttons -->
-			{#each (CATEGORIES.filter(c => c !== 'all') as EngineCategory[]) as cat}
-				{@const catActive = isCategoryActive(cat)}
-				{@const catPartial = isCategoryPartial(cat)}
+		<div class="cat-section" class:cat-section--expanded={isExpanded}>
+			<!-- Category header: click to expand/collapse, right-click to toggle all -->
+			<div class="cat-section__header">
 				<button
-					class="sel-cat-btn"
-					class:sel-cat-btn--active={catActive}
-					class:sel-cat-btn--partial={catPartial && !catActive}
-					style="--cat-color:{CAT_COLOR[cat]}"
-					onclick={() => selectCategory(cat)}
-					title="{catActive ? 'Deselect' : 'Select'} all {CATEGORY_LABELS[cat]} engines"
-					aria-pressed={catActive}
+					class="cat-section__toggle"
+					onclick={() => toggleExpanded(cat as EngineCategory)}
+					aria-expanded={isExpanded}
+					title="Expand {CATEGORY_LABELS[cat]} engines"
 				>
-					<span class="sel-cat-dot"></span>
-					{CATEGORY_LABELS[cat]}
+					<span class="cat-chevron">{isExpanded ? '▼' : '▶'}</span>
+					{#if cat !== 'all'}
+						<span class="cat-dot" style="background:{CAT_COLOR[cat]}"></span>
+					{/if}
+					<span class="cat-label">{CATEGORY_LABELS[cat]}</span>
+					<span class="cat-count" class:cat-count--partial={partial && !active} class:cat-count--active={active}>
+						{count}/{total}
+					</span>
 				</button>
-			{/each}
-
-			<div class="sel-divider" aria-hidden="true"></div>
-
-			<!-- Browse by use case / category -->
-			<button
-				class="sel-btn sel-btn--browse"
-				class:sel-btn--active={browserOpen}
-				onclick={() => { browserOpen = true; emitCmd(cmd.openBrowser()); }}
-				title="Browse engines by use case and category"
-				aria-label="Open engine browser"
-				aria-expanded={browserOpen}
-			>
-				<svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-					<rect x="1" y="1" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
-					<rect x="9" y="1" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
-					<rect x="1" y="9" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
-					<rect x="9" y="9" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
-				</svg>
-				Browse
-			</button>
-		</div>
-	</div>
-
-	<!-- ── Engine chips row ───────────────────────────────────────────────── -->
-	<div
-		class="chips-row"
-		role="list"
-		aria-label="Engine chips — click to toggle, shift-click to range-select, drag to reorder"
-	>
-		{#each orderedEngines as engine, i (engine.id)}
-			{@const isActive = $activeEngines.includes(engine.id)}
-			{@const isDragOver = dragOverIndex === i && dragFromIndex !== null && dragFromIndex !== i}
-			<div
-				role="listitem"
-				class="chip-wrap"
-				class:drag-over={isDragOver}
-				draggable="true"
-				ondragstart={e => onDragStart(e, i)}
-				ondragover={e => onDragOver(e, i)}
-				ondrop={e => onDrop(e, i)}
-				ondragend={onDragEnd}
-			>
+				<!-- Quick toggle all in category -->
 				<button
-					class="chip"
-					class:chip--active={isActive}
-					style="--cat-color:{CAT_COLOR[engine.category] ?? 'var(--c-text-3)'}"
-					onclick={e => handleChipClick(e, engine.id, i)}
-					aria-pressed={isActive}
-					title="{engine.displayName} · {engine.operatorCount} operators · tier {engine.tier}{'\n'}Shift+click to range-select"
-				>
-					<span class="chip__dot"></span>
-					<span class="chip__name">{engine.displayName}</span>
-					<span class="chip__count">{engine.operatorCount}</span>
-				</button>
+					class="cat-section__all-btn"
+					onclick={() => selectCategory(cat as EngineCategory)}
+					title="{active ? 'Deselect' : 'Select'} all {CATEGORY_LABELS[cat]}"
+					aria-label="{active ? 'Deselect' : 'Select'} all {CATEGORY_LABELS[cat]} engines"
+				>{active ? '−' : '+'}</button>
 			</div>
-		{/each}
-	</div>
+
+			<!-- Engine chips — only shown when expanded -->
+			{#if isExpanded}
+				<div class="cat-section__chips" role="list">
+					{#each catEngines as engine, i (engine.id)}
+						{@const isActive = $activeEngines.includes(engine.id)}
+						{@const globalIndex = orderedEngines.findIndex(e => e.id === engine.id)}
+						<button
+							class="chip"
+							class:chip--active={isActive}
+							style="--cat-color:{CAT_COLOR[engine.category] ?? 'var(--c-text-3)'}"
+							onclick={e => handleChipClick(e, engine.id, globalIndex)}
+							aria-pressed={isActive}
+							title="{engine.displayName} · {engine.operatorCount} ops · tier {engine.tier}"
+							role="listitem"
+						>
+							<span class="chip__dot"></span>
+							<span class="chip__name">{engine.displayName}</span>
+							<span class="chip__count">{engine.operatorCount}</span>
+						</button>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	{/each}
 </div>
 
 <!-- ── Engine group browser drawer ───────────────────────────────────────── -->
@@ -290,54 +223,50 @@
 	.engine-selector {
 		display: flex;
 		flex-direction: column;
-		gap: 0;
 	}
 
-	/* ── Category tabs ───────────────────────────────────────────────────────── */
-	.category-bar {
+	/* ── Collapsible category section ────────────────────────────────────────── */
+	.cat-section {
+		border-bottom: 1px solid var(--p-border, #003300);
+	}
+
+	.cat-section__header {
 		display: flex;
-		flex-wrap: nowrap;
-		gap: 2px;
-		padding: var(--sp-2) var(--sp-3) 0;
-		overflow-x: auto;
-		scrollbar-width: none;
-		/* Single row — never grow vertically */
-		align-items: flex-end;
+		align-items: center;
 	}
-	.category-bar::-webkit-scrollbar { display: none; }
 
-	.cat-tab {
-		display: inline-flex;
+	/* Main toggle button — expands/collapses the engine list */
+	.cat-section__toggle {
+		flex: 1;
+		display: flex;
 		align-items: center;
 		gap: 5px;
-		padding: 5px 10px;
-		border: 1px solid transparent;
-		border-bottom: none;
-		border-radius: var(--r-sm) var(--r-sm) 0 0;
-		background: transparent;
-		color: var(--c-text-3);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		font-weight: 500;
+		padding: 5px var(--sp-2);
+		background: var(--p-bg-2, #001400);
+		border: none;
+		color: var(--p-dim, #1a4d1a);
+		font-family: var(--font-mono);
+		font-size: 11px;
+		text-align: left;
 		cursor: pointer;
-		white-space: nowrap;
-		transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast);
+		transition: color var(--t-fast), background var(--t-fast);
+		min-width: 0;
 	}
 
-	.cat-tab:hover {
-		color: var(--c-text);
-		background: var(--c-surface-2);
-		border-color: var(--c-border);
+	.cat-section__toggle:hover {
+		color: var(--p-mid, #33cc33);
+		background: var(--p-bg-3, #001e00);
 	}
 
-	.cat-tab.is-active {
-		color: var(--c-text);
-		background: var(--c-surface-2);
-		border-color: var(--c-border);
+	.cat-section--expanded .cat-section__toggle {
+		color: var(--p-mid, #33cc33);
+		border-left: 2px solid var(--p-border-2, #004d00);
 	}
 
-	.cat-tab.is-partial {
-		color: var(--c-text-2);
+	.cat-chevron {
+		font-size: 8px;
+		flex-shrink: 0;
+		color: var(--p-dim, #1a4d1a);
 	}
 
 	.cat-dot {
@@ -348,195 +277,82 @@
 	}
 
 	.cat-label {
-		font-weight: 500;
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.cat-count {
-		display: inline-flex;
+		font-size: 10px;
+		color: var(--p-dim, #1a4d1a);
+		font-family: var(--font-mono);
+		flex-shrink: 0;
+	}
+
+	.cat-count--partial { color: var(--p-mid, #33cc33); }
+	.cat-count--active  { color: var(--p-bright, #66ff66); }
+
+	/* Quick +/− toggle for the whole category */
+	.cat-section__all-btn {
+		flex-shrink: 0;
+		width: 20px;
+		background: none;
+		border: none;
+		border-left: 1px solid var(--p-border, #003300);
+		color: var(--p-dim, #1a4d1a);
+		font-family: var(--font-mono);
+		font-size: 14px;
+		cursor: pointer;
+		padding: 0;
+		height: 100%;
+		display: flex;
 		align-items: center;
 		justify-content: center;
-		min-width: 18px;
-		height: 16px;
-		padding: 0 4px;
-		background: var(--c-surface-3);
-		border-radius: 10px;
-		font-size: 10px;
-		font-weight: 600;
-		color: var(--c-text-2);
+		transition: color var(--t-fast);
 	}
 
-	.cat-tab.is-active .cat-count {
-		background: var(--c-accent-dim);
-		color: var(--c-accent);
+	.cat-section__all-btn:hover {
+		color: var(--p-bright, #66ff66);
 	}
 
-	/* ── Selection toolbar ───────────────────────────────────────────────────── */
-	.sel-toolbar {
+	/* ── Engine chips inside expanded section ────────────────────────────────── */
+	.cat-section__chips {
 		display: flex;
-		align-items: center;
-		gap: var(--sp-1);
-		margin-left: auto;
-		padding-left: var(--sp-3);
-		flex-shrink: 0;
-		/* Scroll horizontally if too many category buttons */
-		overflow-x: auto;
-		scrollbar-width: none;
-		max-width: 60vw;
-	}
-	.sel-toolbar::-webkit-scrollbar { display: none; }
-
-	.sel-count {
-		display: inline-flex;
-		align-items: baseline;
-		gap: 1px;
-		font-size: 11px;
-		font-family: var(--font-mono);
-		padding: 2px 6px;
-		background: var(--c-surface-3);
-		border-radius: var(--r-sm);
-		user-select: none;
-	}
-	.sel-count__num  { font-weight: 700; color: var(--c-accent); }
-	.sel-count__sep  { color: var(--c-text-3); }
-	.sel-count__total { color: var(--c-text-3); }
-
-	.sel-divider {
-		width: 1px;
-		height: 16px;
-		background: var(--c-border);
-		flex-shrink: 0;
-		margin: 0 var(--sp-1);
-	}
-
-	.sel-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		padding: 3px 8px;
-		background: transparent;
-		border: 1px solid var(--c-border);
-		border-radius: var(--r-sm);
-		color: var(--c-text-2);
-		font-size: 11px;
-		font-weight: 500;
-		cursor: pointer;
-		white-space: nowrap;
-		transition: all var(--t-fast);
-	}
-	.sel-btn:hover:not(:disabled) {
-		border-color: var(--c-border-2);
-		color: var(--c-text);
-		background: var(--c-surface-2);
-	}
-	.sel-btn--disabled,
-	.sel-btn:disabled {
-		opacity: 0.35;
-		cursor: not-allowed;
-	}
-
-	/* Per-category quick-select pills */
-	.sel-cat-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		padding: 2px 7px;
-		background: transparent;
-		border: 1px solid var(--c-border);
-		border-radius: 20px;
-		color: var(--c-text-3);
-		font-size: 11px;
-		font-weight: 500;
-		cursor: pointer;
-		white-space: nowrap;
-		transition: all var(--t-fast);
-	}
-	.sel-cat-btn:hover {
-		border-color: var(--cat-color);
-		color: var(--c-text);
-		background: color-mix(in srgb, var(--cat-color) 8%, transparent);
-	}
-	.sel-cat-btn--active {
-		border-color: var(--cat-color);
-		color: var(--c-text);
-		background: color-mix(in srgb, var(--cat-color) 12%, transparent);
-	}
-	.sel-cat-btn--partial {
-		border-color: color-mix(in srgb, var(--cat-color) 50%, var(--c-border));
-		color: var(--c-text-2);
-	}
-	.sel-cat-dot {
-		width: 5px;
-		height: 5px;
-		border-radius: 50%;
-		background: var(--cat-color);
-		flex-shrink: 0;
-	}
-
-	/* Browse button accent */
-	.sel-btn--browse:hover:not(:disabled) {
-		border-color: var(--c-accent);
-		color: var(--c-accent);
-		background: var(--c-accent-dim);
-	}
-	.sel-btn--active {
-		border-color: var(--c-accent);
-		color: var(--c-accent);
-		background: var(--c-accent-dim);
-	}
-
-	/* ── Chips row ───────────────────────────────────────────────────────────── */
-	.chips-row {
-		display: flex;
-		flex-wrap: nowrap;
-		gap: var(--sp-1);
-		padding: var(--sp-2) var(--sp-3);
-		overflow-x: auto;
-		align-items: center;
-		border-top: 1px solid var(--c-border);
-		background: var(--c-surface-2);
-	}
-
-	.chip-wrap {
-		flex-shrink: 0;
-		cursor: grab;
-		border-radius: var(--r-sm);
-		transition: transform var(--t-fast);
-	}
-
-	.chip-wrap:active { cursor: grabbing; }
-
-	.chip-wrap.drag-over {
-		outline: 2px dashed var(--c-accent);
-		outline-offset: 2px;
+		flex-direction: column;
+		gap: 2px;
+		padding: var(--sp-1) var(--sp-1) var(--sp-2);
+		background: var(--p-bg-3, #001e00);
 	}
 
 	.chip {
-		display: inline-flex;
+		display: flex;
 		align-items: center;
 		gap: 5px;
-		padding: 3px 10px 3px 7px;
-		border: 1px solid var(--c-border);
-		border-radius: 20px;
-		background: var(--c-surface);
-		color: var(--c-text-3);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		font-weight: 500;
+		width: 100%;
+		padding: 3px var(--sp-2);
+		border: 1px solid var(--p-border, #003300);
+		background: transparent;
+		color: var(--p-dim, #1a4d1a);
+		font-family: var(--font-mono);
+		font-size: 11px;
 		cursor: pointer;
-		white-space: nowrap;
+		text-align: left;
 		transition: all var(--t-fast);
+		white-space: nowrap;
+		overflow: hidden;
 	}
 
 	.chip:hover {
-		border-color: var(--c-border-2);
-		color: var(--c-text);
-		background: var(--c-surface-2);
+		border-color: var(--p-border-2, #004d00);
+		color: var(--p-mid, #33cc33);
+		background: rgba(51, 204, 51, 0.05);
 	}
 
 	.chip--active {
-		border-color: var(--cat-color);
-		color: var(--c-text);
-		background: color-mix(in srgb, var(--cat-color) 10%, var(--c-surface));
+		border-color: rgba(51, 204, 51, 0.35);
+		color: var(--p-mid, #33cc33);
+		background: rgba(51, 204, 51, 0.08);
 	}
 
 	.chip--active .chip__dot {
@@ -544,29 +360,29 @@
 	}
 
 	.chip__dot {
-		width: 6px;
-		height: 6px;
+		width: 5px;
+		height: 5px;
 		border-radius: 50%;
-		background: var(--c-border-2);
+		background: var(--p-border-2, #004d00);
 		flex-shrink: 0;
 		transition: background var(--t-fast);
 	}
 
 	.chip__name {
-		font-weight: 500;
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.chip__count {
-		font-size: 10px;
-		color: var(--c-text-3);
-		background: var(--c-surface-3);
-		padding: 0 4px;
-		border-radius: 3px;
-		font-weight: 600;
+		font-size: 9px;
+		color: var(--p-dim, #1a4d1a);
+		font-family: var(--font-mono);
+		flex-shrink: 0;
+		margin-left: auto;
 	}
 
 	.chip--active .chip__count {
-		color: var(--cat-color);
-		background: color-mix(in srgb, var(--cat-color) 15%, transparent);
+		color: var(--p-mid, #33cc33);
 	}
 </style>

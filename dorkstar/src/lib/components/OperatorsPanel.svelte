@@ -226,6 +226,13 @@
         {#if expanded}
           <div class="table-scroll-wrapper">
             <table class="matrix-table">
+              <colgroup>
+                <col style="width:200px;min-width:200px" />
+                <col style="width:32px;min-width:32px" />
+                {#each visibleEngineIds as _id}
+                  <col style="width:80px;min-width:80px" />
+                {/each}
+              </colgroup>
               <thead>
                 <tr>
                   <th class="col-op" scope="col">OPERATOR</th>
@@ -468,10 +475,6 @@
     border-bottom: 1px solid var(--p-border);
     cursor: pointer;
     user-select: none;
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    transition: background var(--t-fast, 120ms);
   }
 
   .group-header:hover {
@@ -510,6 +513,8 @@
   /* ── Table scroll wrapper ─────────────────────────────────── */
   .table-scroll-wrapper {
     overflow-x: auto;
+    overflow-y: visible;
+    width: 100%;
     scrollbar-width: thin;
     scrollbar-color: var(--p-border) transparent;
   }
@@ -529,16 +534,15 @@
   /* ── Matrix table ─────────────────────────────────────────── */
   .matrix-table {
     border-collapse: collapse;
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     font-family: var(--font-mono);
     white-space: nowrap;
     min-width: 100%;
+    letter-spacing: 0;
+    table-layout: fixed;
   }
 
   .matrix-table thead {
-    position: sticky;
-    top: 33px; /* height of group-header */
-    z-index: 1;
     background: var(--p-bg-2);
   }
 
@@ -548,9 +552,10 @@
     padding: 3px 6px;
     text-align: center;
     vertical-align: middle;
+    white-space: nowrap;
   }
 
-  /* Operator name column — left-aligned, sticky */
+  /* Operator name column — left-aligned, sticky, fixed width */
   .col-op,
   .cell-op {
     text-align: left;
@@ -558,7 +563,9 @@
     left: 0;
     background: var(--p-bg);
     z-index: 1;
-    min-width: 180px;
+    width: 200px;
+    min-width: 200px;
+    max-width: 200px;
   }
 
   .matrix-table thead .col-op {
@@ -568,30 +575,40 @@
   .cell-op code {
     color: var(--p-glow);
     font-family: var(--font-mono);
-    font-size: 0.7rem;
+    font-size: 0.75rem;
+    display: block;
+    white-space: nowrap;
   }
 
-  /* Count column */
+  /* Count column — fixed narrow */
   .col-count,
   .cell-count {
-    min-width: 28px;
+    width: 32px;
+    min-width: 32px;
+    max-width: 32px;
     color: var(--p-dim);
-    font-size: 0.65rem;
+    font-size: 0.7rem;
+    text-align: center;
   }
 
-  /* Engine column headers */
+  /* Engine column headers — fixed width */
   .col-engine {
-    min-width: 72px;
-    border-bottom: 2px solid var(--eng-color, var(--p-dim)) !important;
-    font-size: 0.62rem;
+    width: 80px;
+    min-width: 80px;
+    max-width: 80px;
+    border-top: 2px solid var(--eng-color, var(--p-dim));
+    border-bottom: 1px solid color-mix(in srgb, var(--p-border) 60%, transparent);
+    font-size: 0.68rem;
     font-weight: 600;
     color: var(--p-mid);
+    text-align: center;
   }
 
   .engine-link {
     color: inherit;
     text-decoration: none;
-    transition: color var(--t-fast, 120ms);
+    display: block;
+    white-space: nowrap;
   }
 
   .engine-link:hover {
@@ -599,10 +616,15 @@
     text-decoration: underline;
   }
 
-  /* Data cells */
+  /* Support cells — fixed width, centered */
   .cell-support {
     color: var(--p-dim);
     font-size: 0.75rem;
+    width: 80px;
+    min-width: 80px;
+    max-width: 80px;
+    text-align: center;
+    padding: 3px 4px;
   }
 
   .cell-support.yes {
@@ -612,20 +634,20 @@
 
   .check {
     font-weight: 700;
+    display: block;
+    text-align: center;
   }
 
   .dash {
     opacity: 0.3;
+    display: block;
+    text-align: center;
   }
 
   /* Row hover */
   .matrix-row:hover .cell-op,
   .matrix-row:hover .cell-count,
   .matrix-row:hover .cell-support {
-    background: color-mix(in srgb, var(--p-glow) 6%, var(--p-bg));
-  }
-
-  .matrix-row:hover .cell-op {
     background: color-mix(in srgb, var(--p-glow) 6%, var(--p-bg));
   }
 
@@ -640,7 +662,6 @@
     font-size: 0.65rem;
     color: var(--p-dim);
     flex-shrink: 0;
-    letter-spacing: 0.06em;
   }
 
   .footer-sep {

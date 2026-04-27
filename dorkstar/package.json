@@ -10,6 +10,8 @@
 		"setup": "node scripts/setup.js",
 		"setup:check": "node scripts/setup.js --check",
 		"setup:reset": "node scripts/setup.js --reset",
+		"setup:register": "node scripts/setup.js --register",
+		"setup:manual": "node scripts/setup.js --manual",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",

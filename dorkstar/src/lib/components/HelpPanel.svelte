@@ -409,7 +409,8 @@ LICENSE
 
   .tab-btn {
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: 0.75rem;
+    letter-spacing: 0;
     color: var(--p-dim);
     background: transparent;
     border: 1px solid var(--p-border);
@@ -478,7 +479,8 @@ LICENSE
   /* ── Synopsis pre ─────────────────────────────────────────── */
   .synopsis {
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: 0.75rem;
+    letter-spacing: 0;
     color: var(--p-mid);
     background: var(--p-bg-2);
     border: 1px solid var(--p-border);
@@ -494,8 +496,11 @@ LICENSE
     width: 100%;
     border-collapse: collapse;
     font-family: var(--font-mono);
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     margin-bottom: var(--sp-3, 12px);
+    /* IBM EGA bitmap font — no letter-spacing, no wrapping */
+    letter-spacing: 0;
+    white-space: nowrap;
   }
 
   .op-table thead tr {
@@ -506,14 +511,16 @@ LICENSE
     text-align: left;
     color: var(--p-dim);
     font-weight: normal;
-    letter-spacing: 0.08em;
-    padding: 2px var(--sp-2, 8px) 4px 0;
+    letter-spacing: 0;
+    padding: 3px 12px 5px 0;
+    white-space: nowrap;
   }
 
   .op-table td {
-    padding: 3px var(--sp-2, 8px) 3px 0;
+    padding: 4px 12px 4px 0;
     vertical-align: top;
     border-bottom: 1px solid color-mix(in srgb, var(--p-border) 40%, transparent);
+    white-space: nowrap;
   }
 
   .op-table tr:last-child td {
@@ -523,17 +530,22 @@ LICENSE
   .op-name {
     color: var(--p-bright);
     white-space: nowrap;
-    min-width: 100px;
+    min-width: 140px;
+    padding-right: 16px;
   }
 
   .op-syntax {
     color: var(--p-glow);
     white-space: nowrap;
-    min-width: 160px;
+    min-width: 200px;
+    padding-right: 16px;
+    font-family: var(--font-mono);
   }
 
   .op-desc {
     color: var(--p-mid);
+    white-space: normal;
+    max-width: 260px;
   }
 
   /* ── Pre sections (README / ABOUT) ───────────────────────── */
@@ -543,7 +555,8 @@ LICENSE
 
   .vt-pre {
     font-family: var(--font-mono);
-    font-size: 0.7rem;
+    font-size: 0.75rem;
+    letter-spacing: 0;
     color: var(--p-mid);
     background: transparent;
     white-space: pre;
@@ -571,7 +584,8 @@ LICENSE
 
   .faq-q {
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: 0.75rem;
+    letter-spacing: 0;
     color: var(--p-bright);
     padding: var(--sp-2, 8px) var(--sp-3, 12px);
     cursor: pointer;
@@ -607,7 +621,8 @@ LICENSE
 
   .faq-a {
     font-family: var(--font-mono);
-    font-size: 0.7rem;
+    font-size: 0.75rem;
+    letter-spacing: 0;
     color: var(--p-mid);
     line-height: 1.6;
     margin: 0;
