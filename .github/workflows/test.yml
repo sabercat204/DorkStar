@@ -1,0 +1,89 @@
+# macaudit CI — runs the full bats + pytest test suite on every push and PR.
+#
+# Two jobs:
+#   test  — the regression gate. Runs bats (311+ tests) and pytest/hypothesis
+#           (34+ property tests). Fails the workflow on any test failure.
+#   perf  — optional performance harness. Runs after test passes. Uses a
+#           relaxed 60-second target to account for CI runner variability.
+#           continue-on-error: true so a perf regression doesn't block merges.
+#
+# No secrets, API keys, or external services required. Any contributor can
+# fork the repo and get CI running without additional setup.
+
+name: macaudit CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Main test suite — the regression gate
+  # ---------------------------------------------------------------------------
+  test:
+    runs-on: macos-14
+    steps:
+      # 1. Check out the repository so the workflow has access to the source
+      #    tree, test fixtures, and the tests/run.sh harness.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Cache Homebrew downloads so repeat runs skip the download step.
+      #    The cache key includes the workflow file hash so a change to the
+      #    dependency list (adding/removing a brew formula) invalidates the
+      #    cache automatically.
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: brew-${{ runner.os }}-${{ hashFiles('.github/workflows/test.yml') }}
+          restore-keys: brew-${{ runner.os }}-
+
+      # 3. Cache pip packages (hypothesis, pytest) between runs.
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('.github/workflows/test.yml') }}
+          restore-keys: pip-${{ runner.os }}-
+
+      # 4. Install Homebrew dependencies. bats-core is the test runner for
+      #    the shell unit tests; jq is a runtime dependency of macaudit itself.
+      - name: Install Homebrew dependencies
+        run: brew install bats-core jq
+
+      # 5. Install Python test dependencies. hypothesis drives the property-
+      #    based tests; pytest is the test runner.
+      - name: Install Python test dependencies
+        run: pip3 install hypothesis pytest
+
+      # 6. Run the full test suite. tests/run.sh runs bats then pytest and
+      #    exits non-zero if either suite has failures.
+      - name: Run tests
+        run: bash macaudit/tests/run.sh
+
+  # ---------------------------------------------------------------------------
+  # Performance harness — optional, non-blocking
+  # ---------------------------------------------------------------------------
+  perf:
+    needs: test
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Install the same dependencies (no cache sharing across jobs).
+      - name: Install dependencies
+        run: |
+          brew install bats-core jq
+          pip3 install hypothesis pytest
+
+      # Run the perf harness with a relaxed CI target. The default 30-second
+      # target is calibrated for Apple Silicon developer machines; CI runners
+      # are slower, so we use 60 seconds. The harness exits 1 on regression
+      # but continue-on-error above prevents that from blocking the workflow.
+      - name: Run performance harness
+        run: bash macaudit/tests/perf/run.sh --count 100 --target-seconds 120

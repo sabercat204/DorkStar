@@ -144,6 +144,15 @@ baseline_run() {
   : > "$scratch_launchctl"
   : > "$scratch_btm"
 
+  # -- Helper discovery (once per baseline run) ----------------------------
+  # Log which processing mode will be used so operators can confirm the
+  # helper is being picked up (or diagnose why it is not).
+  if _baseline_helper_available; then
+    utils_log_info "using macaudit-helper (compiled)"
+  else
+    utils_log_info "using per-file fallback (no macaudit-helper on PATH)"
+  fi
+
   # -- Tier 1 --------------------------------------------------------------
   case "$tier" in
     1|all)
@@ -273,6 +282,94 @@ _baseline_user_only_bool() {
   else
     printf '%s\n' false
   fi
+}
+
+# =============================================================================
+# Section 1b: Swift helper discovery and dispatch (Phase 2)
+# =============================================================================
+# When `macaudit-helper` is available, the per-plist computation loop
+# (dual-hash + format detection + xattr extraction + key projection)
+# is replaced by a single fork of the compiled binary. The helper reads
+# plist paths from stdin and emits one JSON object per line on stdout.
+# The Bash layer retains ownership of correlation, injection detection,
+# cfprefsd cross-reference, and manifest assembly.
+#
+# Discovery order:
+#   1. `macaudit-helper` on $PATH
+#   2. `macaudit/helper/.build/release/macaudit-helper` (local build)
+#   3. Neither found → fallback to per-file fork loop
+
+# _baseline_helper_available
+#   Returns 0 if macaudit-helper is found. Sets MACAUDIT_HELPER_PATH.
+_baseline_helper_available() {
+  # Already discovered this run?
+  if [ -n "${MACAUDIT_HELPER_PATH:-}" ] && [ -x "$MACAUDIT_HELPER_PATH" ]; then
+    return 0
+  fi
+
+  # Check PATH first
+  if command -v macaudit-helper >/dev/null 2>&1; then
+    MACAUDIT_HELPER_PATH=$(command -v macaudit-helper)
+    export MACAUDIT_HELPER_PATH
+    return 0
+  fi
+
+  # Check local build path (relative to the script directory)
+  local script_dir
+  script_dir="$(cd "$(dirname -- "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
+  local local_path="${script_dir}/helper/.build/release/macaudit-helper"
+  if [ -x "$local_path" ]; then
+    MACAUDIT_HELPER_PATH="$local_path"
+    export MACAUDIT_HELPER_PATH
+    return 0
+  fi
+
+  return 1
+}
+
+# _baseline_helper_version
+#   stdout: version string from `macaudit-helper --version`, or empty.
+_baseline_helper_version() {
+  [ -n "${MACAUDIT_HELPER_PATH:-}" ] || return 0
+  "$MACAUDIT_HELPER_PATH" --version 2>/dev/null | awk '{print $2}'
+}
+
+# _baseline_process_via_helper <paths_file> <projection> [<domain>] <output_file>
+#   Pipe plist paths through macaudit-helper and write JSONL to output_file.
+#   Each output line contains: path, sha256_raw, sha256_canonical, format,
+#   size_bytes, mtime, xattrs, and optionally content.
+#   Returns 0 on success, 2 on fatal helper error.
+_baseline_process_via_helper() {
+  local paths_file="$1"
+  local projection="$2"
+  local domain="${3:-}"
+  local output_file="${4:-$3}"
+
+  # When domain is the output file (no domain arg), shift
+  if [ "$projection" = "none" ] || [ "$projection" = "launch-keys" ]; then
+    output_file="$3"
+    domain=""
+  fi
+
+  [ -n "${MACAUDIT_HELPER_PATH:-}" ] || return 2
+  [ -s "$paths_file" ] || { : > "$output_file"; return 0; }
+
+  local helper_args=()
+  case "$projection" in
+    launch-keys)
+      helper_args+=(--projection launch-keys)
+      ;;
+    security-keys)
+      helper_args+=(--projection security-keys --domain "$domain")
+      ;;
+  esac
+
+  if ! "$MACAUDIT_HELPER_PATH" ${helper_args[@]+"${helper_args[@]}"} \
+       < "$paths_file" > "$output_file" 2>/dev/null; then
+    utils_log_warn "macaudit-helper failed; falling back to per-file mode"
+    return 2
+  fi
+  return 0
 }
 
 # _baseline_append_skipped <skipped_file> <path> <reason>
@@ -447,6 +544,329 @@ _baseline_extract_security_content() {
 #       login hooks, authplugins, emond) via dedicated helpers. Each
 #       helper respects the same sudo gating as the plist walk.
 
+# _baseline_tier1_collect_paths <user_only> <have_sudo> <paths_file> <skipped>
+#   Collect all Tier 1 plist paths into <paths_file> for batch helper
+#   processing. Records skipped roots in <skipped>. Returns 0 always.
+_baseline_tier1_collect_paths() {
+  local user_only="$1"
+  local have_sudo="$2"
+  local paths_file="$3"
+  local skipped="$4"
+
+  : > "$paths_file"
+
+  # -- System roots --------------------------------------------------------
+  if [ "$user_only" -ne 1 ]; then
+    local root
+    while IFS= read -r root; do
+      [ -n "$root" ] || continue
+      if [ "$have_sudo" -eq 0 ]; then
+        _baseline_append_skipped "$skipped" "$root" "no-sudo"
+        continue
+      fi
+      [ -d "$root" ] || continue
+      if [ ! -r "$root" ]; then
+        _baseline_append_skipped "$skipped" "$root" "permission-denied"
+        continue
+      fi
+      # Only LaunchDaemons/LaunchAgents roots have plists for the helper
+      case "$root" in
+        /Library/LaunchDaemons|/Library/LaunchAgents|*/Library/LaunchAgents)
+          : ;;
+        *) continue ;;
+      esac
+      local child
+      for child in "$root"/*.plist; do
+        [ -e "$child" ] || continue
+        if [ ! -r "$child" ]; then
+          _baseline_append_skipped "$skipped" "$child" "permission-denied"
+          continue
+        fi
+        printf '%s\n' "$child" >> "$paths_file"
+      done
+    done < <(surfaces_tier1_system_paths)
+  fi
+
+  # -- User roots ----------------------------------------------------------
+  local uroot
+  while IFS= read -r uroot; do
+    [ -n "$uroot" ] || continue
+    [ -d "$uroot" ] || continue
+    if [ ! -r "$uroot" ]; then
+      _baseline_append_skipped "$skipped" "$uroot" "permission-denied"
+      continue
+    fi
+    case "$uroot" in
+      /Library/LaunchDaemons|/Library/LaunchAgents|*/Library/LaunchAgents)
+        : ;;
+      *) continue ;;
+    esac
+    local child
+    for child in "$uroot"/*.plist; do
+      [ -e "$child" ] || continue
+      if [ ! -r "$child" ]; then
+        _baseline_append_skipped "$skipped" "$child" "permission-denied"
+        continue
+      fi
+      printf '%s\n' "$child" >> "$paths_file"
+    done
+  done < <(surfaces_tier1_user_paths "$HOME")
+
+  return 0
+}
+
+# _baseline_tier1_walk_via_helper <entries> <skipped> <labels>
+#   Batch-process all collected Tier 1 plist paths through the Swift
+#   helper. For each helper output line, extract the Label from the
+#   content object, correlate with launchctl/BTM, determine the surface,
+#   and emit the full manifest entry. Returns 0 on success, 2 on helper
+#   failure (caller should fall back to per-file mode).
+_baseline_tier1_walk_via_helper() {
+  local entries="$1"
+  local skipped="$2"
+  local labels="$3"
+
+  local paths_file="${MACAUDIT_TMPDIR}/tier1_paths.txt"
+  local helper_output="${MACAUDIT_TMPDIR}/tier1_helper_output.jsonl"
+
+  # Run the helper with launch-keys projection
+  if ! _baseline_process_via_helper "$paths_file" "launch-keys" "$helper_output"; then
+    return 2
+  fi
+
+  # Process each line of helper output
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+
+    # Check for per-file error from helper
+    local h_error
+    h_error=$(printf '%s' "$line" | jq -r '.error // empty' 2>/dev/null)
+    if [ -n "$h_error" ]; then
+      local h_path
+      h_path=$(printf '%s' "$line" | jq -r '.path' 2>/dev/null)
+      _baseline_append_skipped "$skipped" "$h_path" "helper-error"
+      continue
+    fi
+
+    # Extract fields from helper JSON
+    local h_path sha_raw sha_canon fmt content xattrs size mtime
+    h_path=$(printf '%s' "$line" | jq -r '.path' 2>/dev/null)
+    sha_raw=$(printf '%s' "$line" | jq -r '.sha256_raw' 2>/dev/null)
+    sha_canon=$(printf '%s' "$line" | jq -r '.sha256_canonical' 2>/dev/null)
+    fmt=$(printf '%s' "$line" | jq -r '.format' 2>/dev/null)
+    content=$(printf '%s' "$line" | jq -c '.content // {}' 2>/dev/null)
+    xattrs=$(printf '%s' "$line" | jq -c '.xattrs // {}' 2>/dev/null)
+    size=$(printf '%s' "$line" | jq -r '.size_bytes // empty' 2>/dev/null)
+    mtime=$(printf '%s' "$line" | jq -r '.mtime // empty' 2>/dev/null)
+
+    # Normalise empty/null fields
+    [ -n "$fmt" ] && [ "$fmt" != "null" ] || fmt=invalid
+    [ -n "$content" ] || content='{}'
+    [ -n "$xattrs" ] || xattrs='{}'
+
+    # Extract Label from content for injection detection
+    local label
+    label=$(printf '%s' "$content" | jq -r '.Label // empty' 2>/dev/null)
+    if [ -n "$label" ]; then
+      printf '%s\n' "$label" >> "$labels"
+    fi
+
+    # Determine surface from path
+    local surface
+    surface=$(_baseline_surface_for_tier1_path "$h_path")
+    [ -n "$surface" ] || surface="launchd_system"
+
+    # Correlate against launchctl + BTM scratch files
+    local correlation launchctl_loaded btm_registered
+    correlation=$(persistence_correlate \
+      "$label" \
+      "${MACAUDIT_TMPDIR}/launchctl.tsv" \
+      "${MACAUDIT_TMPDIR}/btm.jsonl")
+    launchctl_loaded=$(printf '%s' "$correlation" | jq -r '.launchctl_loaded' 2>/dev/null)
+    btm_registered=$(printf '%s' "$correlation" | jq -r '.btm_registered' 2>/dev/null)
+    case "$launchctl_loaded" in true|false) : ;; *) launchctl_loaded=null ;; esac
+    case "$btm_registered"   in true|false) : ;; *) btm_registered=null   ;; esac
+
+    # Emit the manifest entry
+    local entry
+    entry=$(manifest_build_entry \
+      --path "$h_path" \
+      --tier 1 \
+      --surface "$surface" \
+      --format "$fmt" \
+      --sha256-raw "$sha_raw" \
+      --sha256-canonical "$sha_canon" \
+      --size "$size" \
+      --mtime "$mtime" \
+      --xattrs-json "$xattrs" \
+      --content-json "$content" \
+      --cfprefsd-match null \
+      --launchctl-loaded "$launchctl_loaded" \
+      --btm-registered "$btm_registered") || continue
+
+    printf '%s\n' "$entry" >> "$entries"
+  done < "$helper_output"
+
+  return 0
+}
+
+# _baseline_tier2_collect_paths <user_only> <have_sudo> <paths_file> <skipped>
+#   Collect all Tier 2 plist paths into <paths_file> for batch helper
+#   processing. Records skipped roots in <skipped>. Returns 0 always.
+_baseline_tier2_collect_paths() {
+  local user_only="$1"
+  local have_sudo="$2"
+  local paths_file="$3"
+  local skipped="$4"
+
+  : > "$paths_file"
+
+  # -- System preferences roots --------------------------------------------
+  if [ "$user_only" -ne 1 ]; then
+    local sroot
+    while IFS= read -r sroot; do
+      [ -n "$sroot" ] || continue
+      if [ "$have_sudo" -eq 0 ]; then
+        _baseline_append_skipped "$skipped" "$sroot" "no-sudo"
+        continue
+      fi
+      [ -d "$sroot" ] || continue
+      if [ ! -r "$sroot" ]; then
+        _baseline_append_skipped "$skipped" "$sroot" "permission-denied"
+        continue
+      fi
+      local child
+      for child in "$sroot"/*.plist "$sroot"/.*.plist; do
+        [ -e "$child" ] || continue
+        [ -f "$child" ] || continue
+        if [ ! -r "$child" ]; then
+          _baseline_append_skipped "$skipped" "$child" "permission-denied"
+          continue
+        fi
+        printf '%s\n' "$child" >> "$paths_file"
+      done
+    done < <(surfaces_tier2_system_paths)
+  fi
+
+  # -- User preferences roots ----------------------------------------------
+  local uroot
+  while IFS= read -r uroot; do
+    [ -n "$uroot" ] || continue
+    [ -d "$uroot" ] || continue
+    if [ ! -r "$uroot" ]; then
+      _baseline_append_skipped "$skipped" "$uroot" "permission-denied"
+      continue
+    fi
+    local child
+    for child in "$uroot"/*.plist "$uroot"/.*.plist; do
+      [ -e "$child" ] || continue
+      [ -f "$child" ] || continue
+      if [ ! -r "$child" ]; then
+        _baseline_append_skipped "$skipped" "$child" "permission-denied"
+        continue
+      fi
+      printf '%s\n' "$child" >> "$paths_file"
+    done
+  done < <(surfaces_tier2_user_paths "$HOME")
+
+  return 0
+}
+
+# _baseline_tier2_walk_via_helper <entries> <skipped>
+#   Batch-process all collected Tier 2 plist paths through the Swift
+#   helper WITHOUT projection (the helper handles hashing + xattr; we
+#   do key projection in bash after because each plist has a different
+#   domain). Returns 0 on success, 2 on helper failure.
+_baseline_tier2_walk_via_helper() {
+  local entries="$1"
+  local skipped="$2"
+
+  local paths_file="${MACAUDIT_TMPDIR}/tier2_paths.txt"
+  local helper_output="${MACAUDIT_TMPDIR}/tier2_helper_output.jsonl"
+
+  # Run the helper without projection (hashing + xattr only)
+  if ! _baseline_process_via_helper "$paths_file" "none" "$helper_output"; then
+    return 2
+  fi
+
+  # Process each line of helper output
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+
+    # Check for per-file error from helper
+    local h_error
+    h_error=$(printf '%s' "$line" | jq -r '.error // empty' 2>/dev/null)
+    if [ -n "$h_error" ]; then
+      local h_path
+      h_path=$(printf '%s' "$line" | jq -r '.path' 2>/dev/null)
+      _baseline_append_skipped "$skipped" "$h_path" "helper-error"
+      continue
+    fi
+
+    # Extract fields from helper JSON
+    local h_path sha_raw sha_canon fmt xattrs size mtime
+    h_path=$(printf '%s' "$line" | jq -r '.path' 2>/dev/null)
+    sha_raw=$(printf '%s' "$line" | jq -r '.sha256_raw' 2>/dev/null)
+    sha_canon=$(printf '%s' "$line" | jq -r '.sha256_canonical' 2>/dev/null)
+    fmt=$(printf '%s' "$line" | jq -r '.format' 2>/dev/null)
+    xattrs=$(printf '%s' "$line" | jq -c '.xattrs // {}' 2>/dev/null)
+    size=$(printf '%s' "$line" | jq -r '.size_bytes // empty' 2>/dev/null)
+    mtime=$(printf '%s' "$line" | jq -r '.mtime // empty' 2>/dev/null)
+
+    # Normalise empty/null fields
+    [ -n "$fmt" ] && [ "$fmt" != "null" ] || fmt=invalid
+    [ -n "$xattrs" ] || xattrs='{}'
+
+    # Derive domain from path and project security keys in bash
+    local domain content
+    domain=$(cfprefsd_domain_from_path "$h_path")
+    content=$(_baseline_extract_security_content "$h_path" "$domain")
+    [ -n "$content" ] || content='{}'
+
+    # Determine surface from path
+    local surface
+    surface=$(_baseline_surface_for_tier2_path "$h_path")
+    [ -n "$surface" ] || surface=preferences_system
+
+    # cfprefsd cross-reference
+    local live match match_json
+    if [ -n "$domain" ]; then
+      live=$(cfprefsd_live_canonical "$domain")
+      match=$(cfprefsd_compare "$sha_canon" "$live")
+    else
+      live=""
+      match=""
+    fi
+    case "$match" in
+      true|false) match_json="$match" ;;
+      *)          match_json=null    ;;
+    esac
+
+    # Emit the manifest entry
+    local entry
+    entry=$(manifest_build_entry \
+      --path "$h_path" \
+      --tier 2 \
+      --surface "$surface" \
+      --format "$fmt" \
+      --sha256-raw "$sha_raw" \
+      --sha256-canonical "$sha_canon" \
+      --size "$size" \
+      --mtime "$mtime" \
+      --xattrs-json "$xattrs" \
+      --content-json "$content" \
+      --cfprefsd-match "$match_json" \
+      --launchctl-loaded null \
+      --btm-registered null) || continue
+
+    printf '%s\n' "$entry" >> "$entries"
+  done < "$helper_output"
+
+  return 0
+}
+
 # _baseline_tier1_walk <user_only> <entries> <skipped> <labels> <launchctl_tsv> <btm_jsonl>
 #   Main Tier 1 orchestration helper. Populates every scratch file
 #   listed above except the launchctl-labels file (which is produced by
@@ -482,41 +902,57 @@ _baseline_tier1_walk() {
   local have_sudo=0
   if utils_has_sudo; then have_sudo=1; fi
 
-  # -- Tier 1 system roots -------------------------------------------------
-  if [ "$user_only" -ne 1 ]; then
-    local root
-    while IFS= read -r root; do
-      [ -n "$root" ] || continue
-      if [ "$have_sudo" -eq 0 ]; then
-        _baseline_append_skipped "$skipped" "$root" "no-sudo"
-        continue
-      fi
-      if [ ! -d "$root" ]; then
-        # A non-existent root is not a permission problem — it just
-        # means this macOS install does not ship that surface. We
-        # skip it silently; the `skipped_paths` field is for paths
-        # the tool COULD NOT read, not for paths that do not exist.
-        continue
-      fi
-      if [ ! -r "$root" ]; then
-        _baseline_append_skipped "$skipped" "$root" "permission-denied"
-        continue
-      fi
-      _baseline_tier1_process_root "$root" "$entries" "$skipped" "$labels"
-    done < <(surfaces_tier1_system_paths)
+  # -- Helper-accelerated path (batch all plists, then correlate) ----------
+  # When the helper is available, we collect all Tier 1 plist paths into
+  # a scratch file, run the helper once with --projection launch-keys,
+  # then iterate the JSONL output to correlate and emit entries. If the
+  # helper fails (exit 2), we fall through to the per-file loop below.
+  local tier1_used_helper=0
+  if _baseline_helper_available; then
+    _baseline_tier1_collect_paths "$user_only" "$have_sudo" \
+      "${MACAUDIT_TMPDIR}/tier1_paths.txt" "$skipped"
+    if _baseline_tier1_walk_via_helper "$entries" "$skipped" "$labels"; then
+      tier1_used_helper=1
+    fi
   fi
 
-  # -- Tier 1 user roots ---------------------------------------------------
-  local uroot
-  while IFS= read -r uroot; do
-    [ -n "$uroot" ] || continue
-    [ -d "$uroot" ] || continue
-    if [ ! -r "$uroot" ]; then
-      _baseline_append_skipped "$skipped" "$uroot" "permission-denied"
-      continue
+  if [ "$tier1_used_helper" -eq 0 ]; then
+    # -- Tier 1 system roots (fallback per-file path) ----------------------
+    if [ "$user_only" -ne 1 ]; then
+      local root
+      while IFS= read -r root; do
+        [ -n "$root" ] || continue
+        if [ "$have_sudo" -eq 0 ]; then
+          _baseline_append_skipped "$skipped" "$root" "no-sudo"
+          continue
+        fi
+        if [ ! -d "$root" ]; then
+          # A non-existent root is not a permission problem — it just
+          # means this macOS install does not ship that surface. We
+          # skip it silently; the `skipped_paths` field is for paths
+          # the tool COULD NOT read, not for paths that do not exist.
+          continue
+        fi
+        if [ ! -r "$root" ]; then
+          _baseline_append_skipped "$skipped" "$root" "permission-denied"
+          continue
+        fi
+        _baseline_tier1_process_root "$root" "$entries" "$skipped" "$labels"
+      done < <(surfaces_tier1_system_paths)
     fi
-    _baseline_tier1_process_root "$uroot" "$entries" "$skipped" "$labels"
-  done < <(surfaces_tier1_user_paths "$HOME")
+
+    # -- Tier 1 user roots (fallback per-file path) ------------------------
+    local uroot
+    while IFS= read -r uroot; do
+      [ -n "$uroot" ] || continue
+      [ -d "$uroot" ] || continue
+      if [ ! -r "$uroot" ]; then
+        _baseline_append_skipped "$skipped" "$uroot" "permission-denied"
+        continue
+      fi
+      _baseline_tier1_process_root "$uroot" "$entries" "$skipped" "$labels"
+    done < <(surfaces_tier1_user_paths "$HOME")
+  fi
 
   # -- Legacy persistence mechanisms --------------------------------------
   _baseline_emit_cron_entries     "$user_only" "$entries" "$skipped"
@@ -1008,35 +1444,52 @@ _baseline_tier2_walk() {
   local have_sudo=0
   if utils_has_sudo; then have_sudo=1; fi
 
-  # -- System preferences roots (sudo-gated when --user-only is unset) ----
-  if [ "$user_only" -ne 1 ]; then
-    local sroot
-    while IFS= read -r sroot; do
-      [ -n "$sroot" ] || continue
-      if [ "$have_sudo" -eq 0 ]; then
-        _baseline_append_skipped "$skipped" "$sroot" "no-sudo"
-        continue
-      fi
-      [ -d "$sroot" ] || continue
-      if [ ! -r "$sroot" ]; then
-        _baseline_append_skipped "$skipped" "$sroot" "permission-denied"
-        continue
-      fi
-      _baseline_tier2_process_root "$sroot" "$entries" "$skipped"
-    done < <(surfaces_tier2_system_paths)
+  # -- Helper-accelerated path (batch all plists, then project + correlate)
+  # When the helper is available, we collect all Tier 2 plist paths into
+  # a scratch file, run the helper once WITHOUT projection (hashing +
+  # xattr only), then iterate the JSONL output to derive domains, project
+  # security keys in bash, do cfprefsd cross-reference, and emit entries.
+  # If the helper fails (exit 2), we fall through to the per-file loop.
+  local tier2_used_helper=0
+  if _baseline_helper_available; then
+    _baseline_tier2_collect_paths "$user_only" "$have_sudo" \
+      "${MACAUDIT_TMPDIR}/tier2_paths.txt" "$skipped"
+    if _baseline_tier2_walk_via_helper "$entries" "$skipped"; then
+      tier2_used_helper=1
+    fi
   fi
 
-  # -- User preferences root (always attempted) ----------------------------
-  local uroot
-  while IFS= read -r uroot; do
-    [ -n "$uroot" ] || continue
-    [ -d "$uroot" ] || continue
-    if [ ! -r "$uroot" ]; then
-      _baseline_append_skipped "$skipped" "$uroot" "permission-denied"
-      continue
+  if [ "$tier2_used_helper" -eq 0 ]; then
+    # -- System preferences roots (fallback per-file path) -----------------
+    if [ "$user_only" -ne 1 ]; then
+      local sroot
+      while IFS= read -r sroot; do
+        [ -n "$sroot" ] || continue
+        if [ "$have_sudo" -eq 0 ]; then
+          _baseline_append_skipped "$skipped" "$sroot" "no-sudo"
+          continue
+        fi
+        [ -d "$sroot" ] || continue
+        if [ ! -r "$sroot" ]; then
+          _baseline_append_skipped "$skipped" "$sroot" "permission-denied"
+          continue
+        fi
+        _baseline_tier2_process_root "$sroot" "$entries" "$skipped"
+      done < <(surfaces_tier2_system_paths)
     fi
-    _baseline_tier2_process_root "$uroot" "$entries" "$skipped"
-  done < <(surfaces_tier2_user_paths "$HOME")
+
+    # -- User preferences root (fallback per-file path) --------------------
+    local uroot
+    while IFS= read -r uroot; do
+      [ -n "$uroot" ] || continue
+      [ -d "$uroot" ] || continue
+      if [ ! -r "$uroot" ]; then
+        _baseline_append_skipped "$skipped" "$uroot" "permission-denied"
+        continue
+      fi
+      _baseline_tier2_process_root "$uroot" "$entries" "$skipped"
+    done < <(surfaces_tier2_user_paths "$HOME")
+  fi
 
   return 0
 }
@@ -1281,20 +1734,154 @@ _baseline_build_tier3_env_file() {
   return 0
 }
 
-# _baseline_pppc_payloads_json
-#   stdout: JSON array of PPPC profile payload identifiers. Sourced
-#           from the `MACAUDIT_PPPC_JSON` env override when set; else
-#           falls back to `[]`. The real implementation that parses
-#           `profiles show -type configuration` lands with the
-#           profiles collector in a later task — this stub keeps the
-#           correlation pass testable without that dependency.
-_baseline_pppc_payloads_json() {
-  local src="${MACAUDIT_PPPC_JSON:-[]}"
-  if ! printf '%s' "$src" | jq -e 'type == "array"' >/dev/null 2>&1; then
+# _baseline_pppc_parse_profiles <xml_input>
+#   Parse XML plist output from `profiles show -type configuration` and
+#   extract every PPPC payload identifier.
+#
+#   The profiles output is an XML plist with structure:
+#     _computerlevel / _userlevel (arrays of profile dicts)
+#       each profile dict has PayloadContent (array of payload dicts)
+#         each payload dict has PayloadType and (for PPPC) Services dict
+#           Services dict maps service names to arrays of entry dicts
+#             each entry dict has Identifier (string)
+#
+#   stdout: deduplicated, sorted JSON array of identifier strings.
+#           Empty array `[]` on any parse failure or empty input.
+_baseline_pppc_parse_profiles() {
+  local xml_input="$1"
+  if [ -z "$xml_input" ]; then
     printf '%s\n' '[]'
     return 0
   fi
-  printf '%s' "$src" | jq -c '.' 2>/dev/null
+
+  local json_input
+  json_input=$(printf '%s' "$xml_input" | plutil -convert json -o - - 2>/dev/null)
+  if [ -z "$json_input" ]; then
+    utils_log_warn "PPPC: profiles output is not valid XML plist"
+    printf '%s\n' '[]'
+    return 0
+  fi
+
+  local result
+  result=$(printf '%s' "$json_input" | jq -c '
+    [
+      (._computerlevel // []),
+      (._userlevel // [])
+    ] | add // []
+    | [.[].PayloadContent // [] | .[]
+       | select(.PayloadType == "com.apple.TCC.configuration-profile-policy")
+       | .Services // {}
+       | to_entries[].value // []
+       | .[]
+       | .Identifier // empty
+      ]
+    | unique
+  ' 2>/dev/null)
+
+  if [ -z "$result" ] || [ "$result" = "null" ]; then
+    printf '%s\n' '[]'
+    return 0
+  fi
+  printf '%s\n' "$result"
+}
+
+# _baseline_pppc_pretty_print <service_identifier_pairs_json>
+#   Accept a JSON array of {"service": "...", "identifier": "..."} objects
+#   and produce a valid XML plist fragment matching the structure of a
+#   com.apple.TCC.configuration-profile-policy payload. Used by the
+#   round-trip property test (P32) to verify the parser.
+#
+#   stdout: valid XML plist that passes `plutil -lint`.
+_baseline_pppc_pretty_print() {
+  local pairs_json="$1"
+  [ -n "$pairs_json" ] || pairs_json='[]'
+
+  # Build the Services dict via jq: group identifiers by service key,
+  # then wrap each group in the PPPC entry structure.
+  local services_json
+  services_json=$(printf '%s' "$pairs_json" | jq -c '
+    group_by(.service)
+    | map({
+        key: .[0].service,
+        value: [.[] | {Identifier: .identifier}]
+      })
+    | from_entries
+  ' 2>/dev/null)
+  [ -n "$services_json" ] || services_json='{}'
+
+  # Build the full profile plist structure and convert to XML via plutil.
+  local full_json
+  full_json=$(jq -cn --argjson svc "$services_json" '{
+    _computerlevel: [{
+      PayloadContent: [{
+        PayloadType: "com.apple.TCC.configuration-profile-policy",
+        Services: $svc
+      }]
+    }]
+  }')
+
+  printf '%s' "$full_json" | plutil -convert xml1 -o - - 2>/dev/null
+}
+
+# _baseline_pppc_payloads_json
+#   stdout: JSON array of PPPC profile payload identifiers.
+#
+#   Override precedence (highest to lowest):
+#     1. MACAUDIT_PPPC_JSON — use directly (Phase 1 test override)
+#     2. PROFILES_SHOW_OVERRIDE — read file, parse via _baseline_pppc_parse_profiles
+#     3. Live `profiles show -type configuration` — invoke, parse
+#
+#   On non-MDM devices (utils_mdm_managed returns false), skip parsing
+#   and return []. When the profiles command is unavailable or fails,
+#   log a warning and return [].
+_baseline_pppc_payloads_json() {
+  # Override 1: MACAUDIT_PPPC_JSON (highest precedence)
+  if [ -n "${MACAUDIT_PPPC_JSON:-}" ]; then
+    local src="$MACAUDIT_PPPC_JSON"
+    if ! printf '%s' "$src" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      printf '%s\n' '[]'
+      return 0
+    fi
+    printf '%s' "$src" | jq -c '.' 2>/dev/null
+    return 0
+  fi
+
+  # Override 2: PROFILES_SHOW_OVERRIDE (file path)
+  if [ -n "${PROFILES_SHOW_OVERRIDE:-}" ]; then
+    if [ ! -f "$PROFILES_SHOW_OVERRIDE" ]; then
+      utils_log_warn "PPPC: PROFILES_SHOW_OVERRIDE file not found: ${PROFILES_SHOW_OVERRIDE}; using empty identifier set"
+      printf '%s\n' '[]'
+      return 0
+    fi
+    local xml
+    xml=$(cat -- "$PROFILES_SHOW_OVERRIDE" 2>/dev/null)
+    _baseline_pppc_parse_profiles "$xml"
+    return 0
+  fi
+
+  # Skip parsing on non-MDM devices — no PPPC profiles to extract.
+  if ! utils_mdm_managed; then
+    printf '%s\n' '[]'
+    return 0
+  fi
+
+  # Live invocation: profiles show -type configuration
+  local profiles_cmd="${PROFILES_CMD_OVERRIDE:-profiles}"
+  if ! command -v "$profiles_cmd" >/dev/null 2>&1; then
+    utils_log_warn "PPPC: profiles command unavailable; using empty identifier set"
+    printf '%s\n' '[]'
+    return 0
+  fi
+
+  local xml
+  xml=$("$profiles_cmd" show -type configuration 2>/dev/null)
+  if [ -z "$xml" ]; then
+    utils_log_warn "PPPC: profiles show returned empty output; using empty identifier set"
+    printf '%s\n' '[]'
+    return 0
+  fi
+
+  _baseline_pppc_parse_profiles "$xml"
 }
 
 # _baseline_gatekeeper_enabled
@@ -1335,10 +1922,11 @@ _baseline_xprotect_version_safe() {
 
 # _baseline_build_environment <fda_available_json>
 #   stdout: one-line JSON object
-#     {fda_available, has_sudo, gatekeeper_enabled, mdm_managed, xprotect_version}
-#   Every field is a JSON literal (bool / null) or a string. Never
-#   reforks utils_fda_probe — the caller threads the already-computed
-#   value in as `$fda_available_json`.
+#     {fda_available, has_sudo, gatekeeper_enabled, mdm_managed,
+#      xprotect_version, pppc_profile_payload_identifiers}
+#   Every field is a JSON literal (bool / null), a string, or an array.
+#   Never reforks utils_fda_probe — the caller threads the already-
+#   computed value in as `$fda_available_json`.
 _baseline_build_environment() {
   local fda_json="$1"
   case "$fda_json" in
@@ -1369,18 +1957,26 @@ _baseline_build_environment() {
     xp_json=$(jq -cn --arg v "$xp_version" '$v')
   fi
 
+  # PPPC identifiers — populated by the real parser (Phase 2) or the
+  # MACAUDIT_PPPC_JSON / PROFILES_SHOW_OVERRIDE overrides.
+  local pppc_json
+  pppc_json=$(_baseline_pppc_payloads_json)
+  [ -n "$pppc_json" ] || pppc_json='[]'
+
   jq -cn \
     --argjson fda_available       "$fda_json" \
     --argjson has_sudo            "$has_sudo_json" \
     --argjson gatekeeper_enabled  "$gk_json" \
     --argjson mdm_managed         "$mdm_json" \
     --argjson xprotect_version    "$xp_json" \
+    --argjson pppc                "$pppc_json" \
     '{
-       fda_available:      $fda_available,
-       has_sudo:           $has_sudo,
-       gatekeeper_enabled: $gatekeeper_enabled,
-       mdm_managed:        $mdm_managed,
-       xprotect_version:   $xprotect_version
+       fda_available:                    $fda_available,
+       has_sudo:                         $has_sudo,
+       gatekeeper_enabled:               $gatekeeper_enabled,
+       mdm_managed:                      $mdm_managed,
+       xprotect_version:                 $xprotect_version,
+       pppc_profile_payload_identifiers: $pppc
      }'
 }
 
