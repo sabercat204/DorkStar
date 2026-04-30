@@ -1,0 +1,29 @@
+#!/bin/bash
+# tests/bin/launchctl — PATH-shim used by the integration-tier12 bats
+# suite (scenario 16.6) to simulate an injected launchctl label that
+# has no matching on-disk plist. The caller sets
+# MACAUDIT_BATS_INJECT_LABEL to the label that should be reported as
+# injected, and (optionally) MACAUDIT_BATS_DISK_LABEL to a label that
+# must ALSO appear in the output so the on-disk plist's label still
+# shows up as "loaded". If MACAUDIT_BATS_DISK_LABEL is empty, only
+# the injected label is emitted.
+#
+# Output format mirrors `launchctl list` exactly: a header row
+# "PID\tStatus\tLabel" followed by one data row per job. The real
+# `persistence_collect_launchctl_user` awk filter strips the header
+# and emits `<label>\t<pid>\t<status>` tuples, so this shim follows
+# the same convention the test suite's other shims use.
+
+set -u
+
+printf 'PID\tStatus\tLabel\n'
+
+if [ -n "${MACAUDIT_BATS_DISK_LABEL:-}" ]; then
+  printf '100\t0\t%s\n' "${MACAUDIT_BATS_DISK_LABEL}"
+fi
+
+if [ -n "${MACAUDIT_BATS_INJECT_LABEL:-}" ]; then
+  printf '999\t0\t%s\n' "${MACAUDIT_BATS_INJECT_LABEL}"
+fi
+
+exit 0
